@@ -5,17 +5,59 @@
         * { margin: 0; padding: 0; border: 0; overflow: hidden; }
         #surface { width:100vw; height:100vh; }
     </style>
-    <script>
-        function resize() {
-            var surface = document.getElementById("surface")
+    <script type="text/javascript">
+		if(typeof String.prototype.startsWith != 'function') {
+			String.prototype.startsWith = function (str){ return this.slice(0, str.length) == str; };
+		}
+		function draw() {
+			var surface = document.getElementById("surface");
             var gl = surface.gl;
             if(!gl) return;
-            gl.viewport(0, 0, surface.width, surface.height);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+			gl.useProgram(gl.program(["id", "white"]));
+			
+		}
+        function resize() {
+            var surface = document.getElementById("surface");
+            var gl = surface.gl;
+            if(!gl) return;
+            gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+			draw();
         }
+		function compile(s) {
+			if(!s.shader) {
+				var src = "";
+				for(c = s.firstChild; c; c = c.nextSibling) if(c.nodeType == c.TEXT_NODE) src += c.textContent;
+				var shader = null;
+				if(s.type == "x-shader/x-vertex") shader = gl.CreateShader(gl.VERTEX_SHADER);
+				else if(s.type == "x-shader/x-fragment") shader = gl.CreateShader(gl.FRAGMENT_SHADER);
+				gl.shaderSource(shader, src);
+				gl.compileShader(shader);
+				if(!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(shader);
+				s.shader = shader;
+			}
+			return s.shader;
+		}
         function init() {
             var gl = document.getElementById("surface").gl;
             if(!gl) return;
             gl.clearColor(0,0,0,1);
+			
+			//document.getElementsByTagName("script").forEach(function(s) { if(s.type.startswith("x-shader")) s });
+			gl.program = function(shaders) {
+				if(!gl.progCache) gl.progCache = {}
+				var key = sn.toString();
+				if(!gl.progCache[key]) {
+					var prog = gl.progCache[key] = glCreateProgram();
+					shaders.forEach(function(s) { prog.attachShader(prog, document.getElementById(s).compile()); });
+					gl.linkProgram(prog);
+					if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw gl.getProgramInfoLog(prog);
+				});
+			}
+
+
+			vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+			gl.enableVertexAttribArray(vertexPositionAttribute);
         }
         function setup() {
             var surface = document.getElementById("surface");
@@ -27,6 +69,14 @@
             resize();
         }
     </script>
+	<script type="x-shader/x-fragment" id="white">
+		void main(void) { gl_FragColor = vec4(1, 1, 1, 1); }
+	</script>
+	<script type="x-shader/x-vertex" id="id">
+		<attr
+		attribute vec3 pos;
+		void main(void) { gl_Position = vec4(posIn, 1); }
+	</script>
 </head><body onload="setup()">
     <canvas id="surface">
         No WebGL
