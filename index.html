@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html><head>
     <meta charset='utf-8'>
+    <style>
+        #surface { width:100%; height:100%; }
+    </style>
     <script>
         function resize() {
             var surface = document.getElementById("surface")
@@ -24,7 +27,7 @@
         }
     </script>
 </head><body onload="setup()">
-    <canvas id="surface" width="100%" height="100%">
+    <canvas id="surface">
         No WebGL
     </canvas>
 </body></html>
