@@ -2,8 +2,7 @@
 <html><head>
     <meta charset='utf-8'>
     <style>
-        html,body { overflow: hidden }
-        * { margin: 0; padding: 0; border: 0; }
+        * { margin: 0; padding: 0; border: 0; overflow: hidden; }
         #surface { width:100vw; height:100vh; }
     </style>
     <script>
@@ -20,7 +19,7 @@
         }
         function setup() {
             var surface = document.getElementById("surface");
-            var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+            var gl = surface.getContext("webgl") || surface.getContext("experimental-webgl");
             if(!gl) return;
             surface.gl = gl;
             surface.onresize = resize();
