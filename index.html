@@ -2,82 +2,155 @@
 <html><head>
     <meta charset='utf-8'>
     <style>
-        * { margin: 0; padding: 0; border: 0; overflow: hidden; }
-        #surface { width:100vw; height:100vh; }
+        * { margin: 0; padding: 0; border: none; overflow: hidden; width:100%; height:100% }
     </style>
     <script type="text/javascript">
 		if(typeof String.prototype.startsWith != 'function') {
-			String.prototype.startsWith = function (str){ return this.slice(0, str.length) == str; };
+			String.prototype.startsWith = function (str){ return this.slice(0, str.length) == str }
 		}
-		function draw() {
-			var surface = document.getElementById("surface");
-            var gl = surface.gl;
-            if(!gl) return;
-			gl.clear(gl.COLOR_BUFFER_BIT);
-			gl.useProgram(gl.program(["id", "white"]));
-			
+		if(typeof(String.prototype.trim) != 'function') {
+			String.prototype.trim = function()  { return String(this).replace(/^\s+|\s+$/g, '') }
+		}
+        function setupGL(canvas) {
+            var gl = surface.getContext("webgl") || surface.getContext("experimental-webgl");
+            if(!gl) throw new Error("no webgl context");
+            surface.gl = gl;
+            window.onresize = resize;
+        }
+        function getEl(id) {
+			var r = document.getElementById(id);
+			if(!r) throw new Error("element [" + id + "] not found");
+			return r;
+		}
+        function getSurf() { return getEl("surface"); }
+        function getGl() {
+			var surface = getSurf();
+			if(!surface.gl) setupGL(surface);
+			return surface.gl;
 		}
         function resize() {
-            var surface = document.getElementById("surface");
-            var gl = surface.gl;
-            if(!gl) return;
-            gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-			draw();
+			var surf = getSurf();
+            var gl = getGl();
+            var w = surf.clientWidth; var h = surf.clientHeight;
+            if(!gl.w || gl.w != w || gl.h != h) {
+				gl.w = w; gl.h = h;
+				surf.width = w; surf.height = h;
+				console.log("resize " + w + " x " + h + " => ");
+				gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+				draw();
+			}
         }
+		function getShape() {
+			var gl = getGl();
+			if(!gl.triangle) {
+				var bufId = gl.createBuffer();
+				gl.bindBuffer(gl.ARRAY_BUFFER, bufId);
+				var n = 25000;
+				var buf = [];
+				for(var i = 0; i < n; ++i) buf = buf.concat([Math.random(), Math.random(), Math.random()]);
+				gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(buf), gl.STATIC_DRAW);
+				gl.triangle = function(attrib, action) {
+					gl.bindBuffer(gl.ARRAY_BUFFER, bufId);
+					gl.vertexAttribPointer(attrib, 3, gl.FLOAT, false, 0, 0);
+					action(n);
+				}
+			}
+			return gl.triangle;
+		}
+		function draw() {
+			var gl = getGl();
+			gl.clear(gl.COLOR_BUFFER_BIT);
+			var prog = gl.program(["identity", "white"]);
+			gl.uniform1f(prog.time, performance.now());
+			getShape()(prog.posIn, function(n) { gl.drawArrays(gl.LINES, 0, n) });
+			requestAnimationFrame(draw)
+		}
 		function compile(s) {
 			if(!s.shader) {
-				var src = "";
+				var gl = getGl();
+				var shader;
+				if(s.type == "x-shader/x-vertex") shader = gl.createShader(gl.VERTEX_SHADER);
+				else if(s.type == "x-shader/x-fragment") shader = gl.createShader(gl.FRAGMENT_SHADER);
+				else return null;
+				var src = '';
 				for(c = s.firstChild; c; c = c.nextSibling) if(c.nodeType == c.TEXT_NODE) src += c.textContent;
-				var shader = null;
-				if(s.type == "x-shader/x-vertex") shader = gl.CreateShader(gl.VERTEX_SHADER);
-				else if(s.type == "x-shader/x-fragment") shader = gl.CreateShader(gl.FRAGMENT_SHADER);
+				var vars = [];
+				src.split('\n').forEach(function(line) {
+					var parts = line.split("//");
+					//var lastArray = parts.length > 1 && parts[1].trim() == "array";
+					parts[0].split(";").forEach(function(statement) {
+						var words = statement.split(/[^a-zA-Z0-9]/).filter(function(w) { return w.trim() });
+						if(words[0] == "attribute") vars = vars.concat([{
+							name : words[words.length-1],
+							array: words.indexOf("array") >= 0,
+							type : 'attribute'
+						}])
+						else if(words[0] == "uniform") vars = vars.concat([{
+							name : words[words.length-1],
+							type : 'uniform'
+						}])
+					})
+				})
 				gl.shaderSource(shader, src);
 				gl.compileShader(shader);
-				if(!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(shader);
+				if(!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
+					throw new Error("error in shader [" + s.id + "]\n" + gl.getShaderInfoLog(shader));
 				s.shader = shader;
+				s.vars = vars;
+				console.log("shader compiled: " + s.id + " => " + JSON.stringify(s.vars))
 			}
-			return s.shader;
+			return s;
 		}
         function init() {
-            var gl = document.getElementById("surface").gl;
-            if(!gl) return;
+            var gl = getGl();
             gl.clearColor(0,0,0,1);
-			
-			//document.getElementsByTagName("script").forEach(function(s) { if(s.type.startswith("x-shader")) s });
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
 			gl.program = function(shaders) {
 				if(!gl.progCache) gl.progCache = {}
-				var key = sn.toString();
+				var key = shaders.toString();
 				if(!gl.progCache[key]) {
-					var prog = gl.progCache[key] = glCreateProgram();
-					shaders.forEach(function(s) { prog.attachShader(prog, document.getElementById(s).compile()); });
-					gl.linkProgram(prog);
-					if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw gl.getProgramInfoLog(prog);
-				});
-			}
-
-
-			vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
-			gl.enableVertexAttribArray(vertexPositionAttribute);
+					var prog = gl.createProgram();
+					var vars = []
+					shaders.forEach(function(s) {
+						var shader = compile(getEl(s));
+						vars = vars.concat(shader.vars)
+						gl.attachShader(prog, shader.shader)
+					})
+					gl.linkProgram(prog)
+					if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("error in program [" + key + "]\n" + gl.getProgramInfoLog(prog));
+					gl.useProgram(prog)
+					prog.vars = {}
+					vars.forEach(function(v) {
+						if(v.type == 'attribute') {
+							prog.vars[v.name] = gl.getAttribLocation(prog, v.name)
+							if(v.array) gl.enableVertexAttribArray(prog, prog.vars[v.name]);
+						} else if(v.type == 'uniform') {
+							prog.vars[v.name] = gl.getUniformLocation(prog, v.name)
+						}
+						if(typeof(prog[v.name]) == "undefined") prog[v.name] = prog.vars[v.name]
+					})
+					console.log("progam linked: " + key + " => " + JSON.stringify(prog.vars))
+					gl.progCache[key] = prog
+				} else gl.useProgram(gl.progCache[key])
+				return gl.progCache[key]
+			};
         }
-        function setup() {
-            var surface = document.getElementById("surface");
-            var gl = surface.getContext("webgl") || surface.getContext("experimental-webgl");
-            if(!gl) return;
-            surface.gl = gl;
-            surface.onresize = resize();
-            init();
-            resize();
+        function entry() {
+			init();
+			resize();
         }
     </script>
+	<script type="x-shader/x-vertex" id="identity">
+		uniform float time;
+		attribute vec3 /* array */ posIn;
+		void main(void) { gl_Position = vec4(posIn * 2.0 - 1.0 + vec3(0,0,sin(time * 1e-3) * 2.0), 1); }
+	</script>
 	<script type="x-shader/x-fragment" id="white">
-		void main(void) { gl_FragColor = vec4(1, 1, 1, 1); }
+		void main(void) { gl_FragColor = vec4(1, 1, 1, .15); }
 	</script>
-	<script type="x-shader/x-vertex" id="id">
-		<attr
-		attribute vec3 pos;
-		void main(void) { gl_Position = vec4(posIn, 1); }
-	</script>
-</head><body onload="setup()">
+
+</head><body onload="entry()">
     <canvas id="surface">
         No WebGL
     </canvas>
