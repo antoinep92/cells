@@ -22,7 +22,7 @@
 					gl.w = w; gl.h = h
 					surf.width = w
 					surf.height = h
-					console.log("resize " + w + " x " + h + " => ")
+					//console.log("resize " + w + " x " + h + " => ")
 					resize(gl)
 					step()
 				}
@@ -102,7 +102,7 @@
 					throw new Error("error in shader [" + s.id + "]\n" + gl.getShaderInfoLog(shader));
 				s.shader = shader;
 				s.vars = vars;
-				console.log("shader compiled: " + s.id + " => " + JSON.stringify(s.vars))
+				//console.log("shader compiled: " + s.id + " => " + JSON.stringify(s.vars))
 			}
 			return s;
 		}
@@ -132,7 +132,7 @@
 						}
 						if(typeof(prog[v.name]) == "undefined") prog[v.name] = prog.vars[v.name]
 					})
-					console.log("progam linked: " + key + " => " + JSON.stringify(prog.vars))
+					//console.log("progam linked: " + key + " => " + JSON.stringify(prog.vars))
 					gl.progCache[key] = prog
 				} else gl.useProgram(gl.progCache[key])
 				return gl.progCache[key]
@@ -152,10 +152,13 @@
 		var config = {
 			width: 1024,
 			height: 1024,
+			food_gen: 1,
 			init: {
 				density: 0.1,
-				min_score: 100,
-				max_score: 1000,
+				min_score: .1,
+				max_score: .2,
+				min_food: .2,
+				max_food: .6
 			},
 			dna : [
 				{
@@ -191,8 +194,8 @@
 					target = 1
 					m = target / gl.camera[2]
 				}
-				if(target > 100) {
-					target = 100
+				if(target > 150) {
+					target = 150
 					m = target / gl.camera[2]
 				}
 				gl.camera[2] = target
@@ -206,21 +209,24 @@
 			
 			var n = config.width * config.height | 0
 			var dna = new Uint8Array(new ArrayBuffer(n))
-			var ep = new Float32Array(new ArrayBuffer(n * 4 * 2))
-			var score_min = config.init.min_score | 0
-			var score_delta = (config.init.max_score - config.init.min_score) | 0
+			var epf = new Float32Array(new ArrayBuffer(n * 4 * 3))
+			var score_min = config.init.min_score
+			var score_delta = (config.init.max_score - config.init.min_score)
+			var food_min = config.init.min_food
+			var food_delta = (config.init.max_food - config.init.min_food)
 			for(var i = 0; i < n; i++) {
 				if(Math.random() <= config.init.density) {
 					var c = Math.floor(Math.random() * config.dna.length) | 0
 					dna[i] = c + 1 | 0
 					var score = score_min + score_delta * Math.random()
 					var e = config.dna[c].init_energy
-					ep[2 * i] = Math.floor(score * e)
-					ep[2*i+1] = Math.floor(score * (1-e))
+					epf[3 * i] = Math.floor(score * e)
+					epf[3*i+1] = Math.floor(score * (1-e))
 				} else {
 					dna[i] = 0
-					ep[2 * i] = ep[2*i+1] = 0
+					epf[3 * i] = epf[3*i+1] = 0
 				}
+				epf[3*i+2] = food_min + Math.random() * food_delta
 			}
 			
 			function setLinear() {
@@ -240,8 +246,8 @@
 			gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, config.width, config.height, 0, gl.ALPHA, gl.UNSIGNED_BYTE, dna)
 			setNearest(); setRepeat()
 			
-			gl.bindTexture(gl.TEXTURE_2D, gl.content.ep = gl.createTexture())
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE_ALPHA, config.width, config.height, 0, gl.LUMINANCE_ALPHA, gl.FLOAT, ep)
+			gl.bindTexture(gl.TEXTURE_2D, gl.content.epf = gl.createTexture())
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, config.width, config.height, 0, gl.RGB, gl.FLOAT, epf)
 			setNearest(); setRepeat()
 			
 			/*gl.screen = gl.createFramebuffer()
@@ -260,13 +266,14 @@
 			//gl.clear(gl.COLOR_BUFFER_BIT)
 			
 			gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.dna)
-			//gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.ep)
+			gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.epf)
 			
 			var prog = gl.program(["2d", "draw"])
 			gl.uniform1f(prog.time, performance.now())
 			gl.uniform3fv(prog.camera, gl.camera)
+			gl.uniform2fv(prog.invSize, [ 1 / config.width, 1 / config.height ])
 			gl.uniform1i(prog.dna, 0)
-			//gl.uniform1i(prog.ep, 1)
+			gl.uniform1i(prog.epf, 1)
 			getQuad(gl)(prog.posIn)
 		}
     </script>
@@ -280,7 +287,8 @@
 	<script type="x-shader/x-fragment" id="draw">
 		precision mediump float;
 		uniform vec3 camera;
-		uniform sampler2D dna, ep;
+		uniform vec2 invSize;
+		uniform sampler2D dna, epf;
 		#define pi2 6.28318530718
 		vec3 hue(float h) {
 			return clamp(vec3(
@@ -292,16 +300,31 @@
 		void main(void) {
 			//gl_FragCoord
 			vec2 trans = (gl_FragCoord.xy + camera.xy) / camera.z;
-			//gl_FragColor = vec4(sin(vec2(10) * trans), sin(trans), 1);
 			
-			vec2 grid1 = step( vec2(1.0 - .2/camera.z), cos(trans * vec2(pi2)) );
-			vec2 grid10 = step( vec2(1.0 - .05/camera.z), cos(trans * vec2(.1*pi2)) );
-			vec2 grid100 = step( vec2(1.0 - .01/camera.z), cos(trans * vec2(.01*pi2)) );
-			vec2 grid = 0.3 * (grid100 * grid10 + grid10 * clamp(0.1 * (camera.z - 5.0), 0.0, 1.0) + grid1 * clamp(0.01 * (camera.z - 50.0), 0.0, 1.0));
-			float d = texture2D(dna, trans / vec2(1024.)).a;
-			vec3 color = d > 0. ? hue(fract(d * 50.)) : vec3(0.);
-			float value = 1.0;
-			gl_FragColor = vec4(vec3(max(grid.x, grid.y)) + color * (max(value, .8) + min(value/.8, 1.0) * vec3(1.0)), 1);
+			vec2 grid1 = step( vec2(1. - .2/camera.z), cos(trans * vec2(pi2)) );
+			vec2 grid10 = step( vec2(1. - .05/camera.z), cos(trans * vec2(.1*pi2)) );
+			vec2 grid100 = step( vec2(1. - .01/camera.z), cos(trans * vec2(.01*pi2)) );
+			vec2 grid2 = grid100 * grid10 + grid10 * clamp(.2 * (camera.z - 5.), 0., 1.) + grid1 * clamp(.01 * (camera.z - 50.), 0., 1.);
+			float grid = min(1., grid2.x + grid2.y);
+			
+			vec2 texCoord = trans * invSize;
+			float dna_ = texture2D(dna, texCoord).a;
+			vec3  epf_ = texture2D(epf, texCoord).rgb;
+			vec3 color;
+			if(dna_ != 0.) { // draw cell
+				float value = 1.0; // TODO: display E/P
+				color = hue(fract(dna_ * 50.)) * max(value, .5) * 2. + min(value - .5, 0.0) * vec3(1.0);
+			} else { // draw food
+				float fill = epf_.b * .5;
+				if(camera.z > 15.) {
+					float pattern = mod(floor(trans.x) + floor(trans.y), 2.) == 0. ? trans.x + trans.y : trans.x - trans.y;
+					pattern = .5 + .5 * cos(pattern * pi2 * 4.);
+					pattern = epf_.b < .5 ? .25 * step(pattern, epf_.b * 2.) : .25 + .25 * step(epf_.b * 2. - 1., pattern);
+					color = vec3(mix(fill, pattern, min((camera.z - 15.) * .01, 1.)));
+				} else color = vec3(fill);
+			}
+			vec3 color2 = .2 * (vec3(1.) - color);
+			gl_FragColor = vec4(mix(color, color2, grid), 1);
 		}
 	</script>
 
