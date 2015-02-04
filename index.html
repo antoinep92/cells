@@ -175,44 +175,74 @@
 			gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
 			if(!(gl.draw_buffers = gl.getExtension("WEBGL_draw_buffers"))) throw new Error("no draw_buffers")
 			if(!(gl.draw_buffers = gl.getExtension("WEBGL_depth_texture"))) throw new Error("no depth_texture")
+			if(!(gl.draw_buffers = gl.getExtension("OES_texture_float"))) throw new Error("no texture_float")
+			if(!(gl.draw_buffers = gl.getExtension("OES_texture_half_float"))) throw new Error("no texture_half_float")
 			
-			var n = config.width * config.height | 0
-			var dna_init = new Uint8Array(new ArrayBuffer(n))
-			var ep_init = new Float32Array(new ArrayBuffer(n * 4 * 2))
-			var score_min = config.init.min_score | 0
-			var score_delta = (config.init.max_score - config.init.min_score) | 0
-			for(var i = 0; i ; i < n) {
-				if(Math.random() <= config.init.density) {
-					dna_init[i] = Math.floor(Math.random() * config.dna.length) | 0
-					var score = score_min + score_delta * Math.random()
-					var e = init.config.dna[dna_init[i]].init_energy
-					ep_init[2 * i] = Math.floor(score * e)
-					ep_init[2*i+1] = Math.floor(score * (1-e))
-				} else {
-					dna_init[i] = 0
-					ep_init[2 * i] = ep_init[2*i+1] = 0
-				}
-			}
-			gl.camera = new Float32Array([0, 0, 1])
+			gl.camera = new Float32Array([0, 0, 20])
 			gl.scroll = function(x,y) {
-				gl.camera[0] -= x / gl.canvas.width
-				gl.camera[1] += y / gl.canvas.height
+				gl.camera[0] -= x
+				gl.camera[1] += y
 			}
 			gl.zoom = function(s, x,y) {
 				var m = 1.1
-				m = s == 0 ? 1 : s > 0 ? 1/m : m
-				gl.camera[0] += (1-m) * x / gl.canvas.width
-				gl.camera[1] += (1-m) * (1 - y / gl.canvas.height)
-				gl.camera[0] /= m
-				gl.camera[1] /= m
-				gl.camera[2] *= m
+				m = s == 0 ? 1 : s > 0 ? m : 1/m
+				var target = gl.camera[2] * m
+				if(target < 1) {
+					target = 1
+					m = target / gl.camera[2]
+				}
+				if(target > 100) {
+					target = 100
+					m = target / gl.camera[2]
+				}
+				gl.camera[2] = target
+				s = 1 - 1/m
+				gl.camera[0] += s * x
+				gl.camera[1] += s * (gl.canvas.height - y)
+				gl.camera[0] *= m
+				gl.camera[1] *= m
 			}
 			gl.content = {}
-			gl.bindTexture(gl.TEXTURE_2D, gl.content.dna_tex = gl.createTexture())
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, config.width, config.height, 0, gl.ALPHA, gl.GL_UNSIGNED_BYTE, dna_init)
 			
-			gl.bindTexture(gl.TEXTURE_2D, gl.content.ep_tex = gl.createTexture())
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE_ALPHA, config.width, config.height, 0, gl.GL_LUMINANCE_ALPHA, gl.GL_FLOAT, ep_init)
+			var n = config.width * config.height | 0
+			var dna = new Uint8Array(new ArrayBuffer(n))
+			var ep = new Float32Array(new ArrayBuffer(n * 4 * 2))
+			var score_min = config.init.min_score | 0
+			var score_delta = (config.init.max_score - config.init.min_score) | 0
+			for(var i = 0; i < n; i++) {
+				if(Math.random() <= config.init.density) {
+					var c = Math.floor(Math.random() * config.dna.length) | 0
+					dna[i] = c + 1 | 0
+					var score = score_min + score_delta * Math.random()
+					var e = config.dna[c].init_energy
+					ep[2 * i] = Math.floor(score * e)
+					ep[2*i+1] = Math.floor(score * (1-e))
+				} else {
+					dna[i] = 0
+					ep[2 * i] = ep[2*i+1] = 0
+				}
+			}
+			
+			function setLinear() {
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+			}
+			function setNearest() {
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+			}
+			function setRepeat() {
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
+			}
+			
+			gl.bindTexture(gl.TEXTURE_2D, gl.content.dna = gl.createTexture())
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, config.width, config.height, 0, gl.ALPHA, gl.UNSIGNED_BYTE, dna)
+			setNearest(); setRepeat()
+			
+			gl.bindTexture(gl.TEXTURE_2D, gl.content.ep = gl.createTexture())
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE_ALPHA, config.width, config.height, 0, gl.LUMINANCE_ALPHA, gl.FLOAT, ep)
+			setNearest(); setRepeat()
 			
 			/*gl.screen = gl.createFramebuffer()
 			gl.bindFramebuffer()
@@ -228,27 +258,50 @@
 		}
         function draw(gl) {
 			//gl.clear(gl.COLOR_BUFFER_BIT)
-			var prog = gl.program(["identity", "white"])
+			
+			gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.dna)
+			//gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.ep)
+			
+			var prog = gl.program(["2d", "draw"])
 			gl.uniform1f(prog.time, performance.now())
 			gl.uniform3fv(prog.camera, gl.camera)
+			gl.uniform1i(prog.dna, 0)
+			//gl.uniform1i(prog.ep, 1)
 			getQuad(gl)(prog.posIn)
 		}
     </script>
-	<script type="x-shader/x-vertex" id="identity">
-		uniform mediump float time;
+	<script type="x-shader/x-vertex" id="2d">
+		uniform float time;
 		attribute vec2 /* array */ posIn;
-		varying mediump vec2 pos;
 		void main(void) {
-			pos = posIn;
 			gl_Position = vec4(posIn * vec2(2) - vec2(1), vec2(0,1));
 		}
 	</script>
-	<script type="x-shader/x-fragment" id="white">
-		varying mediump vec2 pos;
-		uniform mediump vec3 camera;
+	<script type="x-shader/x-fragment" id="draw">
+		precision mediump float;
+		uniform vec3 camera;
+		uniform sampler2D dna, ep;
+		#define pi2 6.28318530718
+		vec3 hue(float h) {
+			return clamp(vec3(
+				6.0 * abs(h-.5) - 1.0,
+				2.0 - 6.0 * abs(h - .33333333333333),
+				2.0 - 6.0 * abs(h - .66666666666667)
+			), vec3(0.0), vec3(1.0));
+		}
 		void main(void) {
 			//gl_FragCoord
-			gl_FragColor = vec4(sin(vec2(10) * (pos + camera.xy) * camera.z), sin((pos.x+camera.x) * camera.z), 1);
+			vec2 trans = (gl_FragCoord.xy + camera.xy) / camera.z;
+			//gl_FragColor = vec4(sin(vec2(10) * trans), sin(trans), 1);
+			
+			vec2 grid1 = step( vec2(1.0 - .2/camera.z), cos(trans * vec2(pi2)) );
+			vec2 grid10 = step( vec2(1.0 - .05/camera.z), cos(trans * vec2(.1*pi2)) );
+			vec2 grid100 = step( vec2(1.0 - .01/camera.z), cos(trans * vec2(.01*pi2)) );
+			vec2 grid = 0.3 * (grid100 * grid10 + grid10 * clamp(0.1 * (camera.z - 5.0), 0.0, 1.0) + grid1 * clamp(0.01 * (camera.z - 50.0), 0.0, 1.0));
+			float d = texture2D(dna, trans / vec2(1024.)).a;
+			vec3 color = d > 0. ? hue(fract(d * 50.)) : vec3(0.);
+			float value = 1.0;
+			gl_FragColor = vec4(vec3(max(grid.x, grid.y)) + color * (max(value, .8) + min(value/.8, 1.0) * vec3(1.0)), 1);
 		}
 	</script>
 
