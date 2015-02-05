@@ -155,12 +155,12 @@
 			food_gen: 1,
 			init: {
 				density: 0.1,
-				min_score: .1,
-				max_score: .2,
-				min_food: .2,
-				max_food: .6
+				min_score: 30,
+				max_score: 100,
+				min_food: 50,
+				max_food: 150
 			},
-			dna : [
+			species : [
 				{
 					name: "plant"
 				},
@@ -175,12 +175,11 @@
         
 		function init(gl) {
 			gl.clearColor(0,0,0,1)
-			gl.enable(gl.BLEND)
-			gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
 			if(!(gl.draw_buffers = gl.getExtension("WEBGL_draw_buffers"))) throw new Error("no draw_buffers")
-			if(!(gl.draw_buffers = gl.getExtension("WEBGL_depth_texture"))) throw new Error("no depth_texture")
-			if(!(gl.draw_buffers = gl.getExtension("OES_texture_float"))) throw new Error("no texture_float")
-			if(!(gl.draw_buffers = gl.getExtension("OES_texture_half_float"))) throw new Error("no texture_half_float")
+			if(!(gl.frag_depth = gl.getExtension("EXT_frag_depth"))) throw new Error("no frag_depth")
+			if(!(gl.depth_texture = gl.getExtension("WEBGL_depth_texture"))) throw new Error("no depth_texture")
+			if(!(gl.texture_float = gl.getExtension("OES_texture_float"))) throw new Error("no texture_float")
+			if(!(gl.texture_half_float = gl.getExtension("OES_texture_half_float"))) throw new Error("no texture_half_float")
 			
 			gl.camera = new Float32Array([0, 0, 20])
 			gl.scroll = function(x,y) {
@@ -209,20 +208,17 @@
 			gl.content = {}
 			
 			var n = config.width * config.height | 0
-			var dna = new Uint8Array(new ArrayBuffer(n))
-			var epf = new Float32Array(new ArrayBuffer(n * 4 * 3))
+			var background = new Uint8Array(new ArrayBuffer(n * 4)) // [ food, ?, ?, ? ]
+			var cells = new Uint8Array(new ArrayBuffer(n * 4)) // [ species, state, energy, protect ]
 			var score_min = config.init.min_score * .5, score_delta = (config.init.max_score - config.init.min_score) * .5
 			var food_min = config.init.min_food, food_delta = (config.init.max_food - config.init.min_food)
 			for(var i = 0; i < n; i++) {
 				if(Math.random() <= config.init.density) {
-					var c = Math.floor(Math.random() * config.dna.length) | 0
-					dna[i] = c + 1 | 0
-					epf[3 * i] = epf[3*i+1] = score_min + score_delta * Math.random()
-				} else {
-					dna[i] = 0
-					epf[3 * i] = epf[3*i+1] = 0
+					var c = Math.floor(Math.random() * config.species.length) | 0
+					cells[4*i] = c + 1 | 0
+					cells[4*i+1] = cells[4*i+2] = score_min + score_delta * Math.random()
 				}
-				epf[3*i+2] = food_min + Math.random() * food_delta
+				background[4*i] = food_min + Math.random() * food_delta
 			}
 			
 			function setLinear() {
@@ -238,39 +234,64 @@
 				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
 			}
 			
-			gl.bindTexture(gl.TEXTURE_2D, gl.content.dna = gl.createTexture())
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, config.width, config.height, 0, gl.ALPHA, gl.UNSIGNED_BYTE, dna)
-			setNearest(); setRepeat()
+			gl.content.background = [null, null]
+			for(i = 0; i < 2; i++) {
+				gl.bindTexture(gl.TEXTURE_2D, gl.content.background[i] = gl.createTexture())
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, config.width, config.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, background)
+				setNearest(); setRepeat()
+			}
 			
-			gl.bindTexture(gl.TEXTURE_2D, gl.content.epf = gl.createTexture())
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, config.width, config.height, 0, gl.RGB, gl.FLOAT, epf)
-			setNearest(); setRepeat()
+			gl.content.cells = [null, null]
+			for(i = 0; i < 2; i++) {
+				gl.bindTexture(gl.TEXTURE_2D, gl.content.cells[i] = gl.createTexture())
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, config.width, config.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, cells)
+				setNearest(); setRepeat()
+			}
 			
-			/*gl.screen = gl.createFramebuffer()
-			gl.bindFramebuffer()
-			gl.framebufferTexture2d()
-			
-			gl.genRenderbuffers(1)
-			gl.framebufferRenderbuffer()*/
+			gl.content.to_cells = [null, null]
+			for(i = 0; i < 2; i++) {
+				gl.bindFramebuffer(gl.FRAMEBUFFER, gl.content.to_cells[i] = gl.createFramebuffer())
+				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.draw_buffers.COLOR_ATTACHMENT0_WEBGL, gl.TEXTURE_2D, gl.content.background[i], 0)
+				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.draw_buffers.COLOR_ATTACHMENT1_WEBGL, gl.TEXTURE_2D, gl.content.cells[i], 0)
+				if(gl.checkFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE) throw new Error("unsupported FBO config")
+			}
+			gl.content.flip = 0
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 			
 			//console.log(getGl().getSupportedExtensions())
 		}
 		function resize(gl) {
-			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
+			//gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
 		}
         function draw(gl) {
-			//gl.clear(gl.COLOR_BUFFER_BIT)
+			var flip = gl.content.flip, flop = 1 - flip;
 			
-			gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.dna)
-			gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.epf)
+			// [ background, cells ][flop] => [ background, cells ][flip]
+			gl.bindFramebuffer(gl.FRAMEBUFFER, gl.content.to_cells[flip])
+			gl.viewport(0, 0, config.width, config.height)
+			gl.draw_buffers.drawBuffersWEBGL([ gl.draw_buffers.COLOR_ATTACHMENT0_WEBGL, gl.draw_buffers.COLOR_ATTACHMENT1_WEBGL ])
+			var prog = gl.program(["2d", "move"])
+			gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.background[flop])
+			gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.cells[flop])
+			gl.uniform1i(prog.background, 0)
+			gl.uniform1i(prog.cells, 1)
+			gl.uniform2fv(prog.invSize, [ 1 / config.width, 1 / config.height ])
+			getQuad(gl)(prog.posIn)
 			
+			// [ background, cells ][flip] => screen
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
 			var prog = gl.program(["2d", "draw"])
+			gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.background[flip])
+			gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.cells[flip])
 			gl.uniform1f(prog.time, performance.now())
 			gl.uniform3fv(prog.camera, gl.camera)
 			gl.uniform2fv(prog.invSize, [ 1 / config.width, 1 / config.height ])
-			gl.uniform1i(prog.dna, 0)
-			gl.uniform1i(prog.epf, 1)
+			gl.uniform1i(prog.background, 0)
+			gl.uniform1i(prog.cells, 1)
 			getQuad(gl)(prog.posIn)
+			
+			gl.content.flip = flop
 		}
     </script>
 	<script type="x-shader/x-vertex" id="2d">
@@ -284,7 +305,7 @@
 		precision mediump float;
 		uniform vec3 camera;
 		uniform vec2 invSize;
-		uniform sampler2D dna, epf;
+		uniform sampler2D background, cells;
 		#define pi2 6.28318530718
 		vec3 hue(float h) {
 			return clamp(vec3(
@@ -304,28 +325,39 @@
 			float grid = min(1., grid2.x + grid2.y);
 			
 			vec2 texCoord = trans * invSize;
-			float dna_ = texture2D(dna, texCoord).a;
-			vec3  epf_ = texture2D(epf, texCoord).rgb;
+			vec4 bg = texture2D(background, texCoord);
+			vec4 cell = texture2D(cells, texCoord);
 			vec3 color;
-			if(dna_ != 0.) { // draw cell
-				color = hue(fract(dna_ * 70.));
-				vec3 fill = color * epf_.r;
-				if(max(abs(fract(trans.x) - .5), abs(fract(trans.y) - .5)) > (.5 - epf_.g * .5)) { // border
+			if(cell.r != 0.) { // draw cell
+				color = hue(fract(cell.r * 70.));
+				vec3 fill = color * cell.b;
+				if(max(abs(fract(trans.x) - .5), abs(fract(trans.y) - .5)) > (.5 - cell.a * .5)) { // border
 					color = mix(fill, (color + vec3(1.)) * .5, clamp((camera.z - 20.) * .02, 0., 1.));
 				} else { // fill
 					color = fill;
 				}
 				//color =  * min(value, .5) * 2. + max(value - .5, 0.0) * vec3(2.0);
 			} else { // draw food
-				float fill = epf_.b * .5;
+				float fill = bg.r * .5;
 				if(camera.z > 15.) {
 					float pattern = mod(floor(trans.x) + floor(trans.y), 2.) == 0. ? trans.x + trans.y : trans.x - trans.y;
 					pattern = .5 + .5 * cos(pattern * pi2 * 4.);
-					pattern = epf_.b < .5 ? .25 * step(pattern, epf_.b * 2.) : .25 + .25 * step(epf_.b * 2. - 1., pattern);
+					pattern = bg.r < .5 ? .25 * step(pattern, bg.r * 2.) : .25 + .25 * step(bg.r * 2. - 1., pattern);
 					color = vec3(mix(fill, pattern, min((camera.z - 15.) * .01, 1.)));
 				} else color = vec3(fill);
 			}
 			gl_FragColor = vec4(vec3(color + vec3(grid * .4)), 1);
+		}
+	</script>
+	<script type="x-shader/x-fragment" id="move">
+		#extension GL_EXT_draw_buffers : require
+		precision mediump float;
+		uniform sampler2D background, cells;
+		uniform vec2 invSize;
+		void main(void) {
+			vec2 pos = gl_FragCoord.xy * invSize;
+			gl_FragData[0] = texture2D(background, pos) + vec4(1. / 255., 0., 0., 1.); // background out
+			gl_FragData[1] = texture2D(cells, pos + vec2(1.,0.) * invSize); // cells out
 		}
 	</script>
 
