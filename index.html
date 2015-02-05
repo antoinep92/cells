@@ -162,12 +162,13 @@
 			},
 			dna : [
 				{
-					name: "herbivore",
-					init_energy: 0.4
+					name: "plant"
 				},
 				{
-					name: "carnivore",
-					init_energy: 0.8
+					name: "sheep"
+				},
+				{
+					name: "wolf"
 				}
 			]
 		}
@@ -210,18 +211,13 @@
 			var n = config.width * config.height | 0
 			var dna = new Uint8Array(new ArrayBuffer(n))
 			var epf = new Float32Array(new ArrayBuffer(n * 4 * 3))
-			var score_min = config.init.min_score
-			var score_delta = (config.init.max_score - config.init.min_score)
-			var food_min = config.init.min_food
-			var food_delta = (config.init.max_food - config.init.min_food)
+			var score_min = config.init.min_score * .5, score_delta = (config.init.max_score - config.init.min_score) * .5
+			var food_min = config.init.min_food, food_delta = (config.init.max_food - config.init.min_food)
 			for(var i = 0; i < n; i++) {
 				if(Math.random() <= config.init.density) {
 					var c = Math.floor(Math.random() * config.dna.length) | 0
 					dna[i] = c + 1 | 0
-					var score = score_min + score_delta * Math.random()
-					var e = config.dna[c].init_energy
-					epf[3 * i] = Math.floor(score * e)
-					epf[3*i+1] = Math.floor(score * (1-e))
+					epf[3 * i] = epf[3*i+1] = score_min + score_delta * Math.random()
 				} else {
 					dna[i] = 0
 					epf[3 * i] = epf[3*i+1] = 0
@@ -312,8 +308,14 @@
 			vec3  epf_ = texture2D(epf, texCoord).rgb;
 			vec3 color;
 			if(dna_ != 0.) { // draw cell
-				float value = 1.0; // TODO: display E/P
-				color = hue(fract(dna_ * 50.)) * max(value, .5) * 2. + min(value - .5, 0.0) * vec3(1.0);
+				color = hue(fract(dna_ * 70.));
+				vec3 fill = color * epf_.r;
+				if(max(abs(fract(trans.x) - .5), abs(fract(trans.y) - .5)) > (.5 - epf_.g * .5)) { // border
+					color = mix(fill, (color + vec3(1.)) * .5, clamp((camera.z - 20.) * .02, 0., 1.));
+				} else { // fill
+					color = fill;
+				}
+				//color =  * min(value, .5) * 2. + max(value - .5, 0.0) * vec3(2.0);
 			} else { // draw food
 				float fill = epf_.b * .5;
 				if(camera.z > 15.) {
@@ -323,8 +325,7 @@
 					color = vec3(mix(fill, pattern, min((camera.z - 15.) * .01, 1.)));
 				} else color = vec3(fill);
 			}
-			vec3 color2 = .2 * (vec3(1.) - color);
-			gl_FragColor = vec4(mix(color, color2, grid), 1);
+			gl_FragColor = vec4(vec3(color + vec3(grid * .4)), 1);
 		}
 	</script>
 
