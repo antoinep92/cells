@@ -81,7 +81,7 @@
 				for(c = s.firstChild; c; c = c.nextSibling) if(c.nodeType == c.TEXT_NODE) src += c.textContent;
 				var vars = []
 				src.replace(/\/\/.*$/mg, '').replace(/\/\*.*\*\//g, '').replace(/^.*#.*/mg, '').split(';').forEach(function(statement) {
-						var words = statement.split(/[^a-zA-Z0-9]/)
+						var words = statement.split(/\W/)
 							.map(function(w) { return w.trim() })
 							.filter(function(w) { return w != '' })
 							.filter(function(w) { return ["const", "int", "float", "vec2", "vec3", "vec4", "sampler2D"].indexOf(w) < 0 })
@@ -90,16 +90,32 @@
 							name: words[i]
 						})
 				})
-				src = "precision mediump float;" +
-					src	.replace(/\$pi2/g, Math.PI * 2)
-						.replace(/\$pi/g, Math.PI)
-						.replace(/\$invWidth/g, 1/config.width)
-						.replace(/\$invHeight/g, 1/config.height)
-						.replace(/\$invSize/g, "vec2(" + 1/config.width + ", " + 1/config.height + ")")
+				src = "precision mediump float;" + src.replace(/\$\w+/g, function(name) {
+					var r = function(name) {
+						if(name.match(/\D/) == null) return parseInt(name)
+						switch(name) {
+							case 'pi': return Math.PI
+							case 'pi2': return Math.PI * 2
+							case 'invWidth': return 1/config.width
+							case 'invHeight': return 1/config.height
+							case 'invSize': return "vec2(" + 1/config.width + ", " + 1/config.height + ")"
+							case 'action': return 16
+							case 'left': return 16
+							case 'right': return 32
+							case 'up': return 64
+							case 'down': return 128
+							default: return (name in config) ? config[name] : name
+						}
+					}(name.slice(1))
+					return (typeof r == 'number' && r === (r|0)) ? r/255 : r
+				})
 				gl.shaderSource(shader, src)
 				gl.compileShader(shader)
-				if(!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
-					throw new Error("error in shader [" + s.id + "]\n" + gl.getShaderInfoLog(shader) + "\n" + src)
+				if(!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+					var lines = src.split('\n'), lined = ''
+					for(var i = 0; i < lines.length; i++) lined += (i+1) + '\t' + lines[i] + '\n'
+					throw new Error("error in shader [" + s.id + "]\n" + gl.getShaderInfoLog(shader) + "\n" + lined)
+				}
 				s.shader = shader
 				s.vars = vars
 				//console.log("shader compiled: " + s.id + " => " + JSON.stringify(s.vars))
@@ -141,45 +157,37 @@
 			window.onresize()
         }
         function step() {
-			draw(getGl())
+			frame(getGl())
 			requestAnimationFrame(step)
+			//setTimeout(step, 1000)
         }
-        
-        /*function() {
-			gl.
-        }*/
-		
+
 		var config = {
 			width: 1024,
 			height: 1024,
 			food_gen: 1,
+			initE: 100, initP: 100,
 			init: {
 				density: 0.1,
-				min_score: 30,
-				max_score: 100,
-				min_food: 50,
-				max_food: 150
+				min_food: 50, max_food: 150
 			},
+			eat:  1,
+			draw: 2,
+			build:3,
+			move: 4,
+			give: 5,
+			take: 6,
+			clone:7,
+			die:  8,
 			species : [
-				{
-					name: "plant"
-				},
-				{
-					name: "sheep"
-				},
-				{
-					name: "wolf"
-				}
+				{ name: "plant" },
+				{ name: "sheep" },
+				{ name: "wolf" }
 			]
 		}
         
 		function init(gl) {
 			gl.clearColor(0,0,0,1)
-			if(!(gl.draw_buffers = gl.getExtension("WEBGL_draw_buffers"))) throw new Error("no draw_buffers")
-			if(!(gl.frag_depth = gl.getExtension("EXT_frag_depth"))) throw new Error("no frag_depth")
-			if(!(gl.depth_texture = gl.getExtension("WEBGL_depth_texture"))) throw new Error("no depth_texture")
-			if(!(gl.texture_float = gl.getExtension("OES_texture_float"))) throw new Error("no texture_float")
-			if(!(gl.texture_half_float = gl.getExtension("OES_texture_half_float"))) throw new Error("no texture_half_float")
 			
 			gl.camera = new Float32Array([0, 0, 20])
 			gl.scroll = function(x,y) {
@@ -208,16 +216,27 @@
 			gl.content = {}
 			
 			var n = config.width * config.height | 0
-			var background = new Uint8Array(new ArrayBuffer(n * 4)) // [ food, ?, ?, ? ]
-			var cells = new Uint8Array(new ArrayBuffer(n * 4)) // [ species, state, energy, protect ]
+			/* actions: 6 bit action + 2 bit direction
+				0	noop
+				1	eat food
+				2	eat own protection
+				3	build protection
+				4	move [dir]
+				5	give to neighbor [dir]
+				6	eat neighbor [dir]
+				7	clone [dir]
+				8	die
+			*/
+			var background = new Uint8Array(new ArrayBuffer(n * 4)) // [ food, noise?, ?, action ]
+			var cells = new Uint8Array(new ArrayBuffer(n * 4)) // [ species, state?, energy, protect ]
 			var entropy = new Uint8Array(new ArrayBuffer(n * 4))
-			var score_min = config.init.min_score * .5, score_delta = (config.init.max_score - config.init.min_score) * .5
 			var food_min = config.init.min_food, food_delta = (config.init.max_food - config.init.min_food)
 			for(var i = 0; i < n; i++) {
 				if(Math.random() <= config.init.density) {
 					var c = Math.floor(Math.random() * config.species.length) | 0
 					cells[4*i] = c + 1 | 0
-					cells[4*i+1] = cells[4*i+2] = score_min + score_delta * Math.random()
+					cells[4*i+2] = config.initE
+					cells[4*i+3] = config.initP
 				}
 				background[4*i] = food_min + Math.random() * food_delta
 				entropy[4*i  ] = Math.random() * 256
@@ -238,86 +257,91 @@
 				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
 				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
 			}
-			
-			gl.bindTexture(gl.TEXTURE_2D, gl.content.entropy = gl.createTexture())
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, config.width, config.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, entropy)
-			setNearest(); setRepeat();
-			
-			gl.content.background = [null, null]
-			for(i = 0; i < 2; i++) {
-				gl.bindTexture(gl.TEXTURE_2D, gl.content.background[i] = gl.createTexture())
-				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, config.width, config.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, background)
-				setNearest(); setRepeat()
+			function createTexture(data) {
+				var tex;
+				gl.bindTexture(gl.TEXTURE_2D, tex = gl.createTexture())
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, config.width, config.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data)
+				setNearest(); setRepeat();
+				return tex;
 			}
-			
-			gl.content.cells = [null, null]
-			for(i = 0; i < 2; i++) {
-				gl.bindTexture(gl.TEXTURE_2D, gl.content.cells[i] = gl.createTexture())
-				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, config.width, config.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, cells)
-				setNearest(); setRepeat()
+			gl.content.entropy = createTexture(entropy)
+			gl.content.background = {
+				tex : [createTexture(background), createTexture(background)],
+				which : 0
 			}
-			
-			gl.content.to_cells = [null, null]
-			for(i = 0; i < 2; i++) {
-				gl.bindFramebuffer(gl.FRAMEBUFFER, gl.content.to_cells[i] = gl.createFramebuffer())
-				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.draw_buffers.COLOR_ATTACHMENT0_WEBGL, gl.TEXTURE_2D, gl.content.background[i], 0)
-				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.draw_buffers.COLOR_ATTACHMENT1_WEBGL, gl.TEXTURE_2D, gl.content.cells[i], 0)
+			gl.content.cells = {
+				tex : [createTexture(cells), createTexture(cells)],
+				which : 0
+			}
+			function createFBO(tex) {
+				var fbo;
+				gl.bindFramebuffer(gl.FRAMEBUFFER, fbo = gl.createFramebuffer())
+				gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
 				if(gl.checkFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE) throw new Error("unsupported FBO config")
+				return fbo;
 			}
-			gl.content.flip = 0
-			gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-			
-			//console.log(getGl().getSupportedExtensions())
+			function addFBO(obj) {
+				obj.fbo = obj.tex.map(createFBO)
+				obj.read = function() { return this.tex[this.which] }
+				obj.write = function() { var r = this.fbo[this.which]; this.which = 1 - this.which; return r; }
+			}
+			addFBO(gl.content.background)
+			addFBO(gl.content.cells)
+			gl.content.cycle = 0
 		}
-		function resize(gl) {
-			//gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
+		function resize(gl) { }
+		
+		function setup(gl, shader) {
+			var prog = gl.program(["2d", shader])
+			if(prog.background) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.background.read()); gl.uniform1i(prog.background, 0) }
+			if(prog.cells) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.cells.read()); gl.uniform1i(prog.cells, 1) }
+			if(prog.entropy) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, gl.content.entropy); gl.uniform1i(prog.entropy, 2) }
+			if(prog.seed) gl.uniform2f(prog.seed, Math.random(), Math.random())
+			return prog
 		}
-        function draw(gl) {
-			var flip = gl.content.flip, flop = 1 - flip;
-			
-			// [ background, cells ][flop] => [ background, cells ][flip]
-			gl.bindFramebuffer(gl.FRAMEBUFFER, gl.content.to_cells[flip])
-			gl.viewport(0, 0, config.width, config.height)
-			gl.draw_buffers.drawBuffersWEBGL([ gl.draw_buffers.COLOR_ATTACHMENT0_WEBGL, gl.draw_buffers.COLOR_ATTACHMENT1_WEBGL ])
-			var prog = gl.program(["2d", "move-test"])
-			gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.background[flop]); gl.uniform1i(prog.background, 0)
-			gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.cells[flop]); gl.uniform1i(prog.cells, 1)
-			gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, gl.content.entropy); gl.uniform1i(prog.entropy, 2)
-			gl.uniform2f(prog.seed, Math.random(), Math.random())
-			getQuad(gl)(prog.posIn)
-			
-			// [ background, cells ][flip] => screen
+		function run(gl, shader, target) {
+			gl.bindFramebuffer(gl.FRAMEBUFFER, target.write())
+			getQuad(gl)(setup(gl, "decide"))
+		}
+		function process(gl) {
+			run(gl, "decide", gl.content.background)
+			run(gl, "check", gl.content.background)
+			run(gl, "mark", gl.content.background)
+			run(gl, "resolve", gl.content.background)
+			run(gl, "act", gl.content.cells)
+		}
+		function draw(gl) {
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
-			var prog = gl.program(["2d", "draw"])
-			gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gl.content.background[flip]); gl.uniform1i(prog.background, 0)
-			gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gl.content.cells[flip]); gl.uniform1i(prog.cells, 1)
-			gl.uniform1f(prog.time, performance.now())
+			var prog = setup(gl, "draw")
 			gl.uniform3fv(prog.camera, gl.camera)
 			getQuad(gl)(prog.posIn)
-			
-			gl.content.flip = flop
+		}
+        function frame(gl) {
+			gl.viewport(0, 0, config.width, config.height)
+			//process(gl)
+			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
+			draw(gl)
+			gl.content.cycle++
 		}
     </script>
 	<script type="x-shader/x-vertex" id="2d">
 		uniform float time;
-		attribute vec2 /* array */ posIn;
+		attribute vec2 posIn;
 		void main(void) {
 			gl_Position = vec4(posIn * vec2(2) - vec2(1), vec2(0,1));
 		}
 	</script>
 	<script type="x-shader/x-fragment" id="draw">
 		uniform vec3 camera;
-		uniform sampler2D background, cells;
+		uniform sampler2D background, cells, entropy;
 		vec3 hue(float h) {
 			return clamp(vec3(
-				6.0 * abs(h-.5) - 1.0,
-				2.0 - 6.0 * abs(h - .33333333333333),
-				2.0 - 6.0 * abs(h - .66666666666667)
+				6. * abs(h-.5) - 1.,
+				2. - 6. * abs(h - .33333333333333),
+				2. - 6. * abs(h - .66666666666667)
 			), 0., 1.);
 		}
 		void main(void) {
-			//gl_FragCoord
 			vec2 trans = (gl_FragCoord.xy + camera.xy) / camera.z;
 			
 			vec2 grid1 = step( 1. - .2/camera.z, cos(trans * $pi2) );
@@ -325,7 +349,6 @@
 			vec2 grid100 = step( 1. - .01/camera.z, cos(trans * .01*$pi2) );
 			vec2 grid2 = grid100 * grid10 + grid10 * clamp(.1 * (camera.z - 4.), 0., 1.) + grid1 * clamp(.01 * (camera.z - 50.), 0., 1.);
 			float grid = min(1., grid2.x + grid2.y);
-			
 			vec2 texCoord = trans * $invSize;
 			vec4 bg = texture2D(background, texCoord);
 			vec4 cell = texture2D(cells, texCoord);
@@ -334,11 +357,10 @@
 				color = hue(fract(cell.r * 70.));
 				vec3 fill = color * cell.b;
 				if(max(abs(fract(trans.x) - .5), abs(fract(trans.y) - .5)) > (.5 - cell.a * .5)) { // border
-					color = mix(fill, (color + 1.) * .5, clamp((camera.z - 20.) * .02, 0., 1.));
+					color = mix(fill, (color + 1.) * .5, clamp((camera.z - 15. - 40. * abs(cell.a - .5)) * .03, 0., 1.));
 				} else { // fill
 					color = fill;
 				}
-				//color =  * min(value, .5) * 2. + max(value - .5, 0.0) * vec3(2.0);
 			} else { // draw food
 				float fill = bg.r * .5;
 				if(camera.z > 15.) {
@@ -351,25 +373,172 @@
 			gl_FragColor = vec4(vec3(color + vec3(grid * .4)), 1);
 		}
 	</script>
-	<script type="x-shader/x-fragment" id="move-test">
-		#extension GL_EXT_draw_buffers : require
+	<script type="x-shader/x-fragment" id="decide">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
-		vec4 rand(vec2 where) { return texture2D(entropy, where + seed); }
-		const float one = 1./255.;
-		vec2 rand_move(vec2 where) {
-			vec4 rnd = rand(where);
-			if(rnd.r > .5) return vec2(0.);
-			if(rnd.g > .5) return vec2(rnd.b > .5 ? -$invWidth : $invWidth, 0.);
-			return vec2(0., rnd.b > .5 ? -$invHeight : $invHeight);
+		float decide(vec4 b_here, vec4 b_left, vec4 b_right, vec4 b_up, vec4 b_down,
+					 vec4 c_here, vec4 c_left, vec4 c_right, vec4 c_up, vec4 c_down, vec4 rnd) {
+			return $move + $left;
 		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
-			gl_FragData[0] = texture2D(background, pos) + vec4(0, 0., 0., 0.); // background out
-			gl_FragData[1] = texture2D(cells, pos + rand_move(pos)); // cells out
+			vec4 bg = texture2D(background, pos);
+			vec4 cell = texture2D(cells, pos);
+			if(cell.r != 0.) {
+				float action = decide(
+					bg,
+					texture2D(background, pos + vec2(-$invWidth, 0.)),
+					texture2D(background, pos + vec2( $invWidth, 0.)),
+					texture2D(background, pos + vec2(0., -$invHeight)),
+					texture2D(background, pos + vec2(0.,  $invHeight)),
+					cell,
+					texture2D(cells, pos + vec2(-$invWidth, 0.)),
+					texture2D(cells, pos + vec2( $invWidth, 0.)),
+					texture2D(cells, pos + vec2(0., -$invHeight)),
+					texture2D(cells, pos + vec2(0.,  $invHeight)),
+					texture2D(entropy, pos + seed)
+				);
+				gl_FragColor = vec4(bg.rgb, action);
+			} else gl_FragColor = bg;
 		}
 	</script>
-
+	<script type="x-shader/x-fragment" id="check">
+		uniform sampler2D background, cells, entropy;
+		uniform vec2 seed;
+		float check(vec4 cell, float input) {
+			float action = mod(input, $action);
+			if((action == $draw  && cell.b < $costDraw)
+			|| (action == $build && cell.a < $costBuild)
+			|| (action == $move  && cell.a < $costMove)
+			|| (action == $give  && cell.b < $costGive)
+			|| (action == $take  && cell.b < $costTake)
+			|| (action == $clone && cell.b < $costClone)
+			) return $die;
+			else return input;
+		}
+		void main(void) {
+			vec2 pos = gl_FragCoord.xy * $invSize;
+			vec4 bg = texture2D(background, pos);
+			vec4 cell = texture2D(cells, pos);
+			if(cell.r != 0.) {
+				gl_FragColor = vec4(bg.rgb, check(cell, bg.a));
+			} else gl_FragColor = bg;
+		}
+	</script>
+	<script type="x-shader/x-fragment" id="mark">
+		uniform sampler2D background, cells, entropy;
+		uniform vec2 seed;
+		float select2(bvec2 candidates, float rnd) {
+			if(rnd > .5)
+				return candidates.r ? 1. : 2.;
+			else
+				return candidates.g ? 2. : 1.
+		}
+		float select4(bvec4 candidates, vec4 rnd) {
+			if(rnd.r > .5)
+				return any(candidates.rg) ? select2(candidates.rg, rnd.g) : 4. * select2(candidates.ba, rnd.g);
+			else
+				return any(candidates.ba) ? 4. * select2(candidates.ba, rnd.g) : select2(candidates.rg, rnd.g);
+		}
+		float select(vec4 neighborhood, vec4 rnd) {
+			vec4 actions = mod(neighborhood, $action);
+			bvec4 isClone = actions == $clone;
+			if(any(isClone)) // cloning has priofity over moves
+				return select4(isClone, rnd);
+			bvec4 isMove = actions == $move;
+			if(any(isMove)
+				return select4(isMove, rnd);
+			return 0; // no conflicting actions
+		}
+		void main(void) {
+			vec2 pos = gl_FragCoord.xy * $invSize;
+			vec4 bg = texture2D(background, pos);
+			vec4 cell = texture2D(cells, pos);
+			float action;
+			if(cell.r == 0.) {
+				gl_FragColor = vec4(bg.rgb, $action * select(
+					vec4(
+						texture2D(background, pos + vec2(-$invWidth, 0.)).a
+						texture2D(background, pos + vec2( $invWidth, 0.)).a
+						texture2D(background, pos + vec2(0., -$invHeight)).a
+						texture2D(background, pos + vec2(0.,  $invHeight)).a
+					),
+					texture2D(entropy, pos + seed)
+				));
+			} else gl_FragColor = vec4(bg.rgb, action);
+		}
+	</script>
+	<script type="x-shader/x-fragment" id="resolve">
+		uniform sampler2D background, cells, entropy;
+		uniform vec2 seed;
+		void main(void) {
+			vec2 pos = gl_FragCoord.xy * $invSize;
+			vec4 bg = texture2D(background, pos);
+			vec4 cell = texture2D(cells, pos);
+			if(cell.r != 0.) {
+				float action = mod(input, $action);
+				if(action == $move || action == $clone) {
+					float direction = bg.a - action;
+					float ctrl;
+					if(direction == $left)	ctrl = texture2D(background, pos + vec2(-$invWidth, 0.)).a; else
+					if(direction == $right)	ctrl = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
+					if(direction == $up)	ctrl = texture2D(background, pos + vec2(0., -$invWidth)).a; else
+					/* direction == $down */ctrl = texture2D(background, pos + vec2(0.,  $invWidth)).a;
+					if(ctrl != direction) bg.a = 0;
+				} else if(action == $eat) {
+					if(bg.r >= $costEat) bg.r -= $costEat;
+				}
+			}
+			gl_FragColor = bg;
+		}
+	</script>
+	<script type="x-shader/x-fragment" id="act">
+		uniform sampler2D background, cells, entropy;
+		uniform vec2 seed;
+		vec4 collateral(float action, vec4 here, vec4 source) {
+			if(action == $give) return here + vec4(0., 0., $gainGive, 0.);
+			if(action == $take) return here - vec4(0., 0., $costTake, 0.);
+			if(action == $move) return source;
+			if(action == $clone) return vec4(source.r, 0., $initE, $initP);
+		}
+		void main(void) {
+			vec2 pos = gl_FragCoord.xy * $invSize;
+			
+			vec4 cell = texture2D(cells, pos);
+			if(cell.r != 0.) {
+				float a = texture2D(background, pos).a;
+				float action = mod(a, $action);
+				if(action == $eat) cell.b += $gainEat; else
+				if(action == $draw) { cell.b += $gainDraw; cell.a -= $costDraw; } else
+				if(action == $build) { cell.b -= $costBuild; cell.a += $gainDraw; } else
+				if(action == $move) { cell = vec4(0.); }
+				if(action == $give) { cell.b -= $giveCost; } else
+				if(action == $take) { cell.b += $gainTake; } else
+				if(action == $clone) { cell.b -= $costClone; } else
+				if(action == $die) { cell = vec4(0.); }
+			}
+			vec4 neighborhood = vec4( 
+				texture2D(background, pos + vec2(-$invWidth, 0.)).a,
+				texture2D(background, pos + vec2( $invWidth, 0.)).a,
+				texture2D(background, pos + vec2(0., -$invWidth)).a,
+				texture2D(background, pos + vec2(0.,  $invWidth)).a
+			);
+			vec4 actions = mod(neighborhood, $action);
+			vec4 directions = neighborhood - actions;
+			
+			if(directions.r == $right) cell = collateral(actions.r, cell, texture2D(cells, pos + vec2(-$invWidth, 0.)));
+			if(directions.g == $left)  cell = collateral(actions.g, cell, texture2D(cells, pos + vec2( $invWidth, 0.)));
+			if(directions.b == $up)    cell = collateral(actions.b, cell, texture2D(cells, pos + vec2(0., -$invWidth)));
+			if(directions.a == $down)  cell = collateral(actions.a, cell, texture2D(cells, pos + vec2(0.,  $invWidth)));
+			
+			if(cell.r != 0.) {
+				if(cell.a == 0.) cell.b -= $nakedLoss;
+				if(cell.b == 0.) cell = vec4(0.);
+			} else cell = vec4(0.);
+			
+			gl_FragColor = cell;
+		}
+	</script>
 </head><body onload="entry()">
     <canvas id="surface">
         No WebGL!
