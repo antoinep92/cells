@@ -166,19 +166,15 @@
 			width: 1024,
 			height: 1024,
 			food_gen: 1,
-			initE: 100, initP: 100,
+			initE: 40, initP: 40,
 			init: {
 				density: 0.1,
 				min_food: 50, max_food: 150
 			},
-			eat:  1,
-			draw: 2,
-			build:3,
-			move: 4,
-			give: 5,
-			take: 6,
-			clone:7,
-			die:  8,
+			eat:  1,	draw: 2,	build:3,	move: 4,	give: 5,	take: 6,	clone:7,	die:  8,
+			gainEat:1,	gainDraw:6,	gainBuild:1,			gainGive:2,	gainTake:10,
+			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,	costTake:10,costClone:100,
+			costNaked: 1,
 			species : [
 				{ name: "plant" },
 				{ name: "sheep" },
@@ -216,17 +212,6 @@
 			gl.content = {}
 			
 			var n = config.width * config.height | 0
-			/* actions: 6 bit action + 2 bit direction
-				0	noop
-				1	eat food
-				2	eat own protection
-				3	build protection
-				4	move [dir]
-				5	give to neighbor [dir]
-				6	eat neighbor [dir]
-				7	clone [dir]
-				8	die
-			*/
 			var background = new Uint8Array(new ArrayBuffer(n * 4)) // [ food, noise?, ?, action ]
 			var cells = new Uint8Array(new ArrayBuffer(n * 4)) // [ species, state?, energy, protect ]
 			var entropy = new Uint8Array(new ArrayBuffer(n * 4))
@@ -283,7 +268,7 @@
 			function addFBO(obj) {
 				obj.fbo = obj.tex.map(createFBO)
 				obj.read = function() { return this.tex[this.which] }
-				obj.write = function() { var r = this.fbo[this.which]; this.which = 1 - this.which; return r; }
+				obj.write = function() { return this.fbo[this.which]}
 			}
 			addFBO(gl.content.background)
 			addFBO(gl.content.cells)
@@ -300,8 +285,11 @@
 			return prog
 		}
 		function run(gl, shader, target) {
+			target.which = 1 - target.which
 			gl.bindFramebuffer(gl.FRAMEBUFFER, target.write())
-			getQuad(gl)(setup(gl, "decide"))
+			target.which = 1 - target.which
+			getQuad(gl)(setup(gl, shader))
+			target.which = 1 - target.which
 		}
 		function process(gl) {
 			run(gl, "decide", gl.content.background)
@@ -318,7 +306,7 @@
 		}
         function frame(gl) {
 			gl.viewport(0, 0, config.width, config.height)
-			//process(gl)
+			process(gl)
 			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
 			draw(gl)
 			gl.content.cycle++
@@ -347,7 +335,7 @@
 			vec2 grid1 = step( 1. - .2/camera.z, cos(trans * $pi2) );
 			vec2 grid10 = step( 1. - .05/camera.z, cos(trans * .1*$pi2) );
 			vec2 grid100 = step( 1. - .01/camera.z, cos(trans * .01*$pi2) );
-			vec2 grid2 = grid100 * grid10 + grid10 * clamp(.1 * (camera.z - 4.), 0., 1.) + grid1 * clamp(.01 * (camera.z - 50.), 0., 1.);
+			vec2 grid2 = grid100 * grid10 + grid10 * clamp(.1 * (camera.z - 4.), 0., 1.) + grid1 * clamp(.01 * (camera.z - 35.), 0., 1.);
 			float grid = min(1., grid2.x + grid2.y);
 			vec2 texCoord = trans * $invSize;
 			vec4 bg = texture2D(background, texCoord);
@@ -378,7 +366,7 @@
 		uniform vec2 seed;
 		float decide(vec4 b_here, vec4 b_left, vec4 b_right, vec4 b_up, vec4 b_down,
 					 vec4 c_here, vec4 c_left, vec4 c_right, vec4 c_up, vec4 c_down, vec4 rnd) {
-			return $move + $left;
+			return $move + rnd.r > .5 ? (rnd.g > .5 ? $up : $down) : (rnd.g > .5 ? $left : $right);
 		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
@@ -399,14 +387,14 @@
 					texture2D(entropy, pos + seed)
 				);
 				gl_FragColor = vec4(bg.rgb, action);
-			} else gl_FragColor = bg;
+			} else gl_FragColor = vec4(bg.rgb, 0.);
 		}
 	</script>
 	<script type="x-shader/x-fragment" id="check">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
-		float check(vec4 cell, float input) {
-			float action = mod(input, $action);
+		float check(vec4 cell, float a) {
+			float action = mod(a, $action);
 			if((action == $draw  && cell.b < $costDraw)
 			|| (action == $build && cell.a < $costBuild)
 			|| (action == $move  && cell.a < $costMove)
@@ -414,7 +402,7 @@
 			|| (action == $take  && cell.b < $costTake)
 			|| (action == $clone && cell.b < $costClone)
 			) return $die;
-			else return input;
+			else return a;
 		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
@@ -432,7 +420,7 @@
 			if(rnd > .5)
 				return candidates.r ? 1. : 2.;
 			else
-				return candidates.g ? 2. : 1.
+				return candidates.g ? 2. : 1.;
 		}
 		float select4(bvec4 candidates, vec4 rnd) {
 			if(rnd.r > .5)
@@ -442,13 +430,13 @@
 		}
 		float select(vec4 neighborhood, vec4 rnd) {
 			vec4 actions = mod(neighborhood, $action);
-			bvec4 isClone = actions == $clone;
+			bvec4 isClone = equal(actions, vec4($clone));
 			if(any(isClone)) // cloning has priofity over moves
 				return select4(isClone, rnd);
-			bvec4 isMove = actions == $move;
-			if(any(isMove)
+			bvec4 isMove = equal(actions, vec4($move));
+			if(any(isMove))
 				return select4(isMove, rnd);
-			return 0; // no conflicting actions
+			return 0.; // no conflicting actions
 		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
@@ -458,9 +446,9 @@
 			if(cell.r == 0.) {
 				gl_FragColor = vec4(bg.rgb, $action * select(
 					vec4(
-						texture2D(background, pos + vec2(-$invWidth, 0.)).a
-						texture2D(background, pos + vec2( $invWidth, 0.)).a
-						texture2D(background, pos + vec2(0., -$invHeight)).a
+						texture2D(background, pos + vec2(-$invWidth, 0.)).a,
+						texture2D(background, pos + vec2( $invWidth, 0.)).a,
+						texture2D(background, pos + vec2(0., -$invHeight)).a,
 						texture2D(background, pos + vec2(0.,  $invHeight)).a
 					),
 					texture2D(entropy, pos + seed)
@@ -476,7 +464,7 @@
 			vec4 bg = texture2D(background, pos);
 			vec4 cell = texture2D(cells, pos);
 			if(cell.r != 0.) {
-				float action = mod(input, $action);
+				float action = mod(cell.a, $action);
 				if(action == $move || action == $clone) {
 					float direction = bg.a - action;
 					float ctrl;
@@ -484,7 +472,7 @@
 					if(direction == $right)	ctrl = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
 					if(direction == $up)	ctrl = texture2D(background, pos + vec2(0., -$invWidth)).a; else
 					/* direction == $down */ctrl = texture2D(background, pos + vec2(0.,  $invWidth)).a;
-					if(ctrl != direction) bg.a = 0;
+					if(ctrl != direction) bg.a = 0.;
 				} else if(action == $eat) {
 					if(bg.r >= $costEat) bg.r -= $costEat;
 				}
@@ -512,7 +500,7 @@
 				if(action == $draw) { cell.b += $gainDraw; cell.a -= $costDraw; } else
 				if(action == $build) { cell.b -= $costBuild; cell.a += $gainDraw; } else
 				if(action == $move) { cell = vec4(0.); }
-				if(action == $give) { cell.b -= $giveCost; } else
+				if(action == $give) { cell.b -= $costGive; } else
 				if(action == $take) { cell.b += $gainTake; } else
 				if(action == $clone) { cell.b -= $costClone; } else
 				if(action == $die) { cell = vec4(0.); }
@@ -532,7 +520,7 @@
 			if(directions.a == $down)  cell = collateral(actions.a, cell, texture2D(cells, pos + vec2(0.,  $invWidth)));
 			
 			if(cell.r != 0.) {
-				if(cell.a == 0.) cell.b -= $nakedLoss;
+				if(cell.a == 0.) cell.b -= $costNaked;
 				if(cell.b == 0.) cell = vec4(0.);
 			} else cell = vec4(0.);
 			
