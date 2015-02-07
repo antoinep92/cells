@@ -45,6 +45,13 @@
 			}
 			window.onmouseup = function(e) { window.draging = false }
 			window.onwheel = function(e) { gl.zoom(Math.sign(e.wheelDelta), e.x, e.y) }
+			window.onkeydown = function(e) {
+				switch(e.which) {
+					case 77: gl.zoom(-1, gl.w / 2, gl.h / 2); break;
+					case 80: gl.zoom( 1, gl.w / 2, gl.h / 2); break;
+					case 32: if(gl.content.mode == 8) gl.content.mode = 0; else gl.content.mode++; console.log(gl.content.mode); break;
+				}
+			}
         }
         function getEl(id) {
 			var r = document.getElementById(id)
@@ -273,6 +280,7 @@
 			addFBO(gl.content.background)
 			addFBO(gl.content.cells)
 			gl.content.cycle = 0
+			gl.content.mode = 0
 		}
 		function resize(gl) { }
 		
@@ -300,7 +308,12 @@
 		}
 		function draw(gl) {
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-			var prog = setup(gl, "draw")
+			var prog;
+			if(gl.content.mode == 0) prog = setup(gl, "draw")
+			else {
+				prog = setup(gl, "debug")
+				gl.uniform1i(prog.channel, gl.content.mode)
+			}
 			gl.uniform3fv(prog.camera, gl.camera)
 			getQuad(gl)(prog.posIn)
 		}
@@ -321,7 +334,7 @@
 	</script>
 	<script type="x-shader/x-fragment" id="draw">
 		uniform vec3 camera;
-		uniform sampler2D background, cells, entropy;
+		uniform sampler2D background, cells;
 		vec3 hue(float h) {
 			return clamp(vec3(
 				6. * abs(h-.5) - 1.,
@@ -359,6 +372,45 @@
 				} else color = vec3(fill);
 			}
 			gl_FragColor = vec4(vec3(color + vec3(grid * .4)), 1);
+		}
+	</script>
+	<script type="x-shader/x-fragment" id="debug">
+		uniform vec3 camera;
+		uniform sampler2D background, cells;
+		uniform int channel;
+		vec3 hue(float h) {
+			return clamp(vec3(
+				6. * abs(h-.5) - 1.,
+				2. - 6. * abs(h - .33333333333333),
+				2. - 6. * abs(h - .66666666666667)
+			), 0., 1.);
+		}
+		void main(void) {
+			vec2 p = (gl_FragCoord.xy + camera.xy) / camera.z;
+			float r;
+			if(channel == 1) r = texture2D(background, p * $invSize).r; else
+			if(channel == 2) r = texture2D(background, p * $invSize).g; else
+			if(channel == 3) r = texture2D(background, p * $invSize).b; else
+			if(channel == 4) r = texture2D(background, p * $invSize).a; else
+			if(channel == 5) r = texture2D(cells, p * $invSize).r; else
+			if(channel == 6) r = texture2D(cells, p * $invSize).g; else
+			if(channel == 7) r = texture2D(cells, p * $invSize).b; else
+			if(channel == 8) r = texture2D(cells, p * $invSize).a; else
+			r = 0.;
+			p = fract(p);
+			vec3 clr;
+			if(any(greaterThan(abs(p - .5), vec2(.45)))) clr = vec3(0.);
+			else {
+				vec4 r4 = vec4(r);
+				r -= (r4.r = mod(r, $4));
+				r -= (r4.g = mod(r, $16));
+				r -= (r4.b = mod(r, $64));
+				r4.a = r;
+				r4 *= vec4(64., 16., 4., 1.);
+				clr = hue(p.y < .5 ? (p.x < .5 ? r4.r : r4.g) : (p.x < .5 ? r4.b : r4.a));
+			}
+			
+			gl_FragColor = vec4(clr, 1.);
 		}
 	</script>
 	<script type="x-shader/x-fragment" id="decide">
