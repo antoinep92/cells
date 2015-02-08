@@ -98,9 +98,10 @@
 						})
 				})
 				src = "precision mediump float;" + src.replace(/\$\w+/g, function(name) {
-					var r = function(name) {
-						if(name.match(/\D/) == null) return parseInt(name)
-						switch(name) {
+					var raw = name[1] == '_'
+					var r = function(n) {
+						if(n.match(/\D/) == null) return parseInt(n)
+						switch(n) {
 							case 'pi': return Math.PI
 							case 'pi2': return Math.PI * 2
 							case 'invWidth': return 1/config.width
@@ -111,10 +112,12 @@
 							case 'right': return 32
 							case 'up': return 64
 							case 'down': return 128
-							default: return (name in config) ? config[name] : name
+							default: return (n in config) ? config[n] : n
 						}
-					}(name.slice(1))
-					return (typeof r == 'number' && r === (r|0)) ? r/255 : r
+					}(name.slice(raw ? 2 : 1))
+					if(!raw && typeof r == 'number' && r === (r|0)) r /= 255
+					//console.log(name, r)
+					return r
 				})
 				gl.shaderSource(shader, src)
 				gl.compileShader(shader)
@@ -399,15 +402,15 @@
 			r = 0.;
 			p = fract(p);
 			vec3 clr;
-			if(any(greaterThan(abs(p - .5), vec2(.45)))) clr = vec3(0.);
+			if(any(greaterThan(abs(p - .5), vec2(.45)))) clr = vec3(0., 0., .5);
 			else {
 				vec4 r4 = vec4(r);
 				r -= (r4.r = mod(r, $4));
 				r -= (r4.g = mod(r, $16));
 				r -= (r4.b = mod(r, $64));
 				r4.a = r;
-				r4 *= vec4(64., 16., 4., 1.);
-				clr = hue(p.y < .5 ? (p.x < .5 ? r4.r : r4.g) : (p.x < .5 ? r4.b : r4.a));
+				r4 *= vec4(64., 16., 4., 1.) * 1.33;
+				clr = vec3(p.y > .5 ? (p.x < .5 ? r4.r : r4.g) : (p.x < .5 ? r4.b : r4.a));
 			}
 			
 			gl_FragColor = vec4(clr, 1.);
@@ -418,7 +421,7 @@
 		uniform vec2 seed;
 		float decide(vec4 b_here, vec4 b_left, vec4 b_right, vec4 b_up, vec4 b_down,
 					 vec4 c_here, vec4 c_left, vec4 c_right, vec4 c_up, vec4 c_down, vec4 rnd) {
-			return $move + rnd.r > .5 ? (rnd.g > .5 ? $up : $down) : (rnd.g > .5 ? $left : $right);
+			return $move + (rnd.r > .5 ? (rnd.g > .5 ? $up : $down) : (rnd.g > .5 ? $left : $right));
 		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
@@ -494,7 +497,6 @@
 			vec2 pos = gl_FragCoord.xy * $invSize;
 			vec4 bg = texture2D(background, pos);
 			vec4 cell = texture2D(cells, pos);
-			float action;
 			if(cell.r == 0.) {
 				gl_FragColor = vec4(bg.rgb, $action * select(
 					vec4(
@@ -505,7 +507,7 @@
 					),
 					texture2D(entropy, pos + seed)
 				));
-			} else gl_FragColor = vec4(bg.rgb, action);
+			} else gl_FragColor = bg;
 		}
 	</script>
 	<script type="x-shader/x-fragment" id="resolve">
@@ -516,14 +518,14 @@
 			vec4 bg = texture2D(background, pos);
 			vec4 cell = texture2D(cells, pos);
 			if(cell.r != 0.) {
-				float action = mod(cell.a, $action);
+				float action = mod(bg.a, $action);
 				if(action == $move || action == $clone) {
 					float direction = bg.a - action;
 					float ctrl;
 					if(direction == $left)	ctrl = texture2D(background, pos + vec2(-$invWidth, 0.)).a; else
 					if(direction == $right)	ctrl = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
 					if(direction == $up)	ctrl = texture2D(background, pos + vec2(0., -$invWidth)).a; else
-					/* direction == $down */ctrl = texture2D(background, pos + vec2(0.,  $invWidth)).a;
+											ctrl = texture2D(background, pos + vec2(0.,  $invWidth)).a;
 					if(ctrl != direction) bg.a = 0.;
 				} else if(action == $eat) {
 					if(bg.r >= $costEat) bg.r -= $costEat;
