@@ -50,6 +50,7 @@
 					case 77: gl.zoom(-1, gl.w / 2, gl.h / 2); break;
 					case 80: gl.zoom( 1, gl.w / 2, gl.h / 2); break;
 					case 32: if(gl.content.mode == 8) gl.content.mode = 0; else gl.content.mode++; console.log(gl.content.mode); break;
+					default: gl.key = String.fromCharCode(e.which)
 				}
 			}
         }
@@ -278,7 +279,7 @@
 			function addFBO(obj) {
 				obj.fbo = obj.tex.map(createFBO)
 				obj.read = function() { return this.tex[this.which] }
-				obj.write = function() { return this.fbo[this.which]}
+				obj.write = function() { return this.fbo[this.which] }
 			}
 			addFBO(gl.content.background)
 			addFBO(gl.content.cells)
@@ -323,6 +324,16 @@
         function frame(gl) {
 			gl.viewport(0, 0, config.width, config.height)
 			process(gl)
+			if(gl.key) {
+				switch(gl.key) {
+					case 'A': run(gl, "decide", gl.content.background); break;
+					case 'Z': run(gl, "check", gl.content.background); break;
+					case 'E': run(gl, "mark", gl.content.background); break;
+					case 'R': run(gl, "resolve", gl.content.background); break;
+					case 'T': run(gl, "act", gl.content.cells); break;
+				}
+				gl.key = null
+			}
 			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
 			draw(gl)
 			gl.content.cycle++
@@ -381,16 +392,10 @@
 		uniform vec3 camera;
 		uniform sampler2D background, cells;
 		uniform int channel;
-		vec3 hue(float h) {
-			return clamp(vec3(
-				6. * abs(h-.5) - 1.,
-				2. - 6. * abs(h - .33333333333333),
-				2. - 6. * abs(h - .66666666666667)
-			), 0., 1.);
-		}
 		void main(void) {
 			vec2 p = (gl_FragCoord.xy + camera.xy) / camera.z;
 			float r;
+			// fract(p.x * $invWidth); // test
 			if(channel == 1) r = texture2D(background, p * $invSize).r; else
 			if(channel == 2) r = texture2D(background, p * $invSize).g; else
 			if(channel == 3) r = texture2D(background, p * $invSize).b; else
@@ -404,13 +409,8 @@
 			vec3 clr;
 			if(any(greaterThan(abs(p - .5), vec2(.45)))) clr = vec3(0., 0., .5);
 			else {
-				vec4 r4 = vec4(r);
-				r -= (r4.r = mod(r, $4));
-				r -= (r4.g = mod(r, $16));
-				r -= (r4.b = mod(r, $64));
-				r4.a = r;
-				r4 *= vec4(64., 16., 4., 1.) * 1.33;
-				clr = vec3(p.y > .5 ? (p.x < .5 ? r4.r : r4.g) : (p.x < .5 ? r4.b : r4.a));
+				vec4 row = p.y > .5 ? step(.5, fract(r * vec4(128., 64., 32., 16.))) : step(.5, fract(r * vec4(8., 4., 2., 1.)));
+				clr = vec3(p.x < .5 ? (p.x < .25 ? row.r : row.g) : (p.x < .75 ? row.b : row.a));
 			}
 			
 			gl_FragColor = vec4(clr, 1.);
@@ -449,13 +449,13 @@
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
 		float check(vec4 cell, float a) {
-			float action = mod(a, $action);
-			if((action == $draw  && cell.b < $costDraw)
-			|| (action == $build && cell.a < $costBuild)
-			|| (action == $move  && cell.a < $costMove)
-			|| (action == $give  && cell.b < $costGive)
-			|| (action == $take  && cell.b < $costTake)
-			|| (action == $clone && cell.b < $costClone)
+			int action = int(mod(a, $action) * 255.);
+			if((action == $_draw  && cell.b < $costDraw)
+			|| (action == $_build && cell.a < $costBuild)
+			|| (action == $_move  && cell.a < $costMove)
+			|| (action == $_give  && cell.b < $costGive)
+			|| (action == $_take  && cell.b < $costTake)
+			|| (action == $_clone && cell.b < $costClone)
 			) return $die;
 			else return a;
 		}
@@ -472,25 +472,21 @@
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
 		float select2(bvec2 candidates, float rnd) {
-			if(rnd > .5)
-				return candidates.r ? 1. : 2.;
-			else
-				return candidates.g ? 2. : 1.;
+			if(rnd > .5) return candidates.r ? 2. : 1.;
+			else return candidates.g ? 1. : 2.;
 		}
 		float select4(bvec4 candidates, vec4 rnd) {
-			if(rnd.r > .5)
-				return any(candidates.rg) ? select2(candidates.rg, rnd.g) : 4. * select2(candidates.ba, rnd.g);
-			else
-				return any(candidates.ba) ? 4. * select2(candidates.ba, rnd.g) : select2(candidates.rg, rnd.g);
+			if(rnd.r > .5) return any(candidates.rg) ? select2(candidates.rg, rnd.g) : 4. * select2(candidates.ba, rnd.g);
+			else return any(candidates.ba) ? 4. * select2(candidates.ba, rnd.g) : select2(candidates.rg, rnd.g);
 		}
 		float select(vec4 neighborhood, vec4 rnd) {
-			vec4 actions = mod(neighborhood, $action);
-			bvec4 isClone = equal(actions, vec4($clone));
-			if(any(isClone)) // cloning has priofity over moves
-				return select4(isClone, rnd);
-			bvec4 isMove = equal(actions, vec4($move));
-			if(any(isMove))
-				return select4(isMove, rnd);
+			ivec4 actions = ivec4(mod(neighborhood, $16) * 255.);
+			actions *= ivec4(equal( ivec4(neighborhood * 16.), ivec4(2, 1, 8, 4) ));
+			// cloning has priofity over moves
+			bvec4 isClone = equal(actions, ivec4($_clone));
+			if(any(isClone)) return select4(isClone, rnd);
+			bvec4 isMove = equal(actions, ivec4($_move));
+			if(any(isMove)) return select4(isMove, rnd);
 			return 0.; // no conflicting actions
 		}
 		void main(void) {
@@ -518,16 +514,18 @@
 			vec4 bg = texture2D(background, pos);
 			vec4 cell = texture2D(cells, pos);
 			if(cell.r != 0.) {
-				float action = mod(bg.a, $action);
-				if(action == $move || action == $clone) {
-					float direction = bg.a - action;
-					float ctrl;
-					if(direction == $left)	ctrl = texture2D(background, pos + vec2(-$invWidth, 0.)).a; else
-					if(direction == $right)	ctrl = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
-					if(direction == $up)	ctrl = texture2D(background, pos + vec2(0., -$invWidth)).a; else
-											ctrl = texture2D(background, pos + vec2(0.,  $invWidth)).a;
-					if(ctrl != direction) bg.a = 0.;
-				} else if(action == $eat) {
+				int action = int(mod(bg.a, $16) * 255.);
+				//float action = mod(bg.a, $action);
+				if(action == $_move || action == $_clone) {
+					int direction = int(bg.a * 16.);
+					float ctrl_f;
+					if(direction == 1)	ctrl_f = texture2D(background, pos + vec2(-$invWidth, 0.)).a; else
+					if(direction == 2)	ctrl_f = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
+					if(direction == 3)	ctrl_f = texture2D(background, pos + vec2(0., -$invWidth)).a; else
+					if(direction == 4)	ctrl_f = texture2D(background, pos + vec2(0.,  $invWidth)).a; else
+										ctrl_f = 0.;
+					if(direction != int(ctrl_f * 16.)) bg.a = 0.;
+				} else if(action == $_eat) {
 					if(bg.r >= $costEat) bg.r -= $costEat;
 				}
 			}
@@ -537,6 +535,8 @@
 	<script type="x-shader/x-fragment" id="act">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
+		/// TODO: actions -> ints to avoid precision issues
+		/// TODO: check int action/direction conversions
 		vec4 collateral(float action, vec4 here, vec4 source) {
 			if(action == $give) return here + vec4(0., 0., $gainGive, 0.);
 			if(action == $take) return here - vec4(0., 0., $costTake, 0.);
