@@ -405,6 +405,7 @@
 			if(channel == 7) r = texture2D(cells, p * $invSize).b; else
 			if(channel == 8) r = texture2D(cells, p * $invSize).a; else
 			r = 0.;
+			r = r * 255. / 256. + .5 / 255.;
 			p = fract(p);
 			vec3 clr;
 			if(any(greaterThan(abs(p - .5), vec2(.45)))) clr = vec3(0., 0., .5);
@@ -448,24 +449,30 @@
 	<script type="x-shader/x-fragment" id="check">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
-		float check(vec4 cell, float a) {
-			int action = int(mod(a, $action) * 255.);
-			if((action == $_draw  && cell.b < $costDraw)
-			|| (action == $_build && cell.a < $costBuild)
-			|| (action == $_move  && cell.a < $costMove)
-			|| (action == $_give  && cell.b < $costGive)
-			|| (action == $_take  && cell.b < $costTake)
-			|| (action == $_clone && cell.b < $costClone)
-			) return $die;
-			else return a;
-		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
 			vec4 bg = texture2D(background, pos);
 			vec4 cell = texture2D(cells, pos);
 			if(cell.r != 0.) {
-				gl_FragColor = vec4(bg.rgb, check(cell, bg.a));
-			} else gl_FragColor = bg;
+				int action = int(mod(bg.a, $16) * 255.);
+				if((action == $_draw  && cell.b < $costDraw)
+				|| (action == $_build && cell.a < $costBuild)
+				|| (action == $_move  && cell.a < $costMove)
+				|| (action == $_give  && cell.b < $costGive)
+				|| (action == $_take  && cell.b < $costTake)
+				|| (action == $_clone && cell.b < $costClone)
+				) bg.a = $die;
+				else if(action == $_eat && bg.r < $costEat) bg.a = 0.;
+				else if(action == $_move || action == $_clone) {
+					 int direction = int(bg.a * 16. + .5);
+					if((direction == 1 && texture2D(cells, pos + vec2(-$invWidth, 0.)).a != 0.)
+					|| (direction == 2 && texture2D(cells, pos + vec2( $invWidth, 0.)).a != 0.)
+					|| (direction == 4 && texture2D(cells, pos + vec2(0., -$invHeight)).a != 0.)
+					|| (direction == 8 && texture2D(cells, pos + vec2(0.,  $invHeight)).a != 0.)
+					) bg.a = 0.;
+				}
+			}
+			gl_FragColor = bg;
 		}
 	</script>
 	<script type="x-shader/x-fragment" id="mark">
@@ -494,7 +501,7 @@
 			vec4 bg = texture2D(background, pos);
 			vec4 cell = texture2D(cells, pos);
 			if(cell.r == 0.) {
-				gl_FragColor = vec4(bg.rgb, $action * select(
+				gl_FragColor = vec4(bg.rgb, $16 * select(
 					vec4(
 						texture2D(background, pos + vec2(-$invWidth, 0.)).a,
 						texture2D(background, pos + vec2( $invWidth, 0.)).a,
@@ -515,18 +522,15 @@
 			vec4 cell = texture2D(cells, pos);
 			if(cell.r != 0.) {
 				int action = int(mod(bg.a, $16) * 255.);
-				//float action = mod(bg.a, $action);
 				if(action == $_move || action == $_clone) {
-					int direction = int(bg.a * 16.);
+					int direction = int(bg.a * 16. + .5);
 					float ctrl_f;
 					if(direction == 1)	ctrl_f = texture2D(background, pos + vec2(-$invWidth, 0.)).a; else
 					if(direction == 2)	ctrl_f = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
-					if(direction == 3)	ctrl_f = texture2D(background, pos + vec2(0., -$invWidth)).a; else
-					if(direction == 4)	ctrl_f = texture2D(background, pos + vec2(0.,  $invWidth)).a; else
+					if(direction == 4)	ctrl_f = texture2D(background, pos + vec2(0., -$invWidth)).a; else
+					if(direction == 8)	ctrl_f = texture2D(background, pos + vec2(0.,  $invWidth)).a; else
 										ctrl_f = 0.;
 					if(direction != int(ctrl_f * 16.)) bg.a = 0.;
-				} else if(action == $_eat) {
-					if(bg.r >= $costEat) bg.r -= $costEat;
 				}
 			}
 			gl_FragColor = bg;
@@ -538,10 +542,13 @@
 		/// TODO: actions -> ints to avoid precision issues
 		/// TODO: check int action/direction conversions
 		vec4 collateral(float action, vec4 here, vec4 source) {
-			if(action == $give) return here + vec4(0., 0., $gainGive, 0.);
-			if(action == $take) return here - vec4(0., 0., $costTake, 0.);
-			if(action == $move) return source;
-			if(action == $clone) return vec4(source.r, 0., $initE, $initP);
+			if(here.a == 0.) { // create/move cell to empty position
+				if(action == $move) return source;
+				if(action == $clone) return vec4(source.r, 0., $initE, $initP);
+			} else { // interact between 2 cells
+				if(action == $give) return here + vec4(0., 0., $gainGive, 0.);
+				if(action == $take) return here - vec4(0., 0., $costTake, 0.);
+			}
 		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
