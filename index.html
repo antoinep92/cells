@@ -382,7 +382,7 @@
 				if(camera.z > 15.) {
 					float pattern = mod(floor(trans.x) + floor(trans.y), 2.) == 0. ? trans.x + trans.y : trans.x - trans.y;
 					pattern = .5 + .5 * cos(pattern * $pi2 * 3.);
-					pattern = bg.r < .5 ? .25 * step(pattern, bg.r * 2.) : .25 + .25 * step(bg.r * 2. - 1., pattern);
+					pattern = bg.r < .5 ? (.25 * step(pattern, bg.r * 2.)) : (.25 + .25 * step(pattern, bg.r * 2. - 1.));
 					color = vec3(mix(fill, pattern, min((camera.z - 15.) * .01, 1.)));
 				} else color = vec3(fill);
 			}
@@ -436,6 +436,7 @@
 				return rnd.r > .5 ? $eat : ($move + select4(vacancies, rnd.ba));
 			}
 			return rnd.r > .5 ? $eat : $build;*/
+			return $eat;
 			bvec4 greener = greaterThan(vec4(b_left.r, b_right.r, b_up.r, b_down.r), vec4(b_here.r));
 			bvec4 greenerFree = notEqual(ivec4(vacancies) * ivec4(greener), ivec4(0));
 			if(b_here.r > $costMove && any(greenerFree)) return rnd.b > c_here.b ? $eat : ($move + select4(greenerFree, rnd.rg));
