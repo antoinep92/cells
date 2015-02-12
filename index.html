@@ -117,7 +117,10 @@
 							default: return (n in config) ? config[n] : n
 						}
 					}(name.slice(raw ? 2 : 1))
-					if(!raw && typeof r == 'number' && r === (r|0)) r /= 255
+					if(!raw && typeof r == 'number' && r === (r|0)) {
+						r = (r / 255) + '';
+						if(r.indexOf('.') < 0) r += '.';
+					}
 					//console.log(name, r)
 					return r
 				})
@@ -183,9 +186,9 @@
 				density: 0.1,
 				min_food: 50, max_food: 150
 			},
-			eat:  1,	draw: 2,	build:3,	move: 4,	give: 5,	take: 6,	clone:7,	die:  8,
+			eat:  1,	draw: 2,	build:3,	move: 4,	give: 5,	take: 6,	clone:7,	change: 8,	die:  9,
 			gainEat:1,	gainDraw:6,	gainBuild:1,			gainGive:2,	gainTake:10,
-			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,	costTake:10,costClone:100,
+			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,	costTake:10,costClone:100,costChange:0,
 			costNaked: 1, probaRegenerate: 1,
 			species : [
 				{ name: "plant" },
@@ -371,7 +374,7 @@
 			vec3 color;
 			if(cell.r != 0.) { // draw cell
 				color = hue(fract(cell.r * 70.));
-				vec3 fill = color * cell.b;
+				vec3 fill = color * (0.1 + 0.8 * cell.b);
 				if(max(abs(fract(trans.x) - .5), abs(fract(trans.y) - .5)) > (.5 - cell.a * .5)) { // border
 					color = mix(fill, (color + 1.) * .5, clamp((camera.z - 15. - 40. * abs(cell.a - .5)) * .03, 0., 1.));
 				} else { // fill
@@ -436,7 +439,9 @@
 				return rnd.r > .5 ? $eat : ($move + select4(vacancies, rnd.ba));
 			}
 			return rnd.r > .5 ? $eat : $build;*/
-			return $eat;
+			//return c_here.b > $costMove ? ($move + $left) : $eat;
+			
+			//if(c_here.g == 0.) return $change + $16; else return $move + $left;
 			bvec4 greener = greaterThan(vec4(b_left.r, b_right.r, b_up.r, b_down.r), vec4(b_here.r));
 			bvec4 greenerFree = notEqual(ivec4(vacancies) * ivec4(greener), ivec4(0));
 			if(b_here.r > $costMove && any(greenerFree)) return rnd.b > c_here.b ? $eat : ($move + select4(greenerFree, rnd.rg));
@@ -475,16 +480,17 @@
 			vec4 cell = texture2D(cells, pos);
 			if(cell.r != 0.) {
 				int action = int(mod(bg.a + $half, $16) * 255.);
-				if((action == $_draw  && cell.b < $costDraw)
-				|| (action == $_build && cell.a < $costBuild)
-				|| (action == $_move  && cell.a < $costMove)
+				if((action == $_draw  && cell.a < $costDraw)
+				|| (action == $_build && cell.b < $costBuild)
+				|| (action == $_move  && cell.b < $costMove)
 				|| (action == $_give  && cell.b < $costGive)
 				|| (action == $_take  && cell.b < $costTake)
 				|| (action == $_clone && cell.b < $costClone)
+				|| (action == $_change && cell.b < $costChange)
 				) bg.a = $die;
 				else if(action == $_eat) {
 					if(bg.r < $costEat) bg.a = 0.;
-					bg.r -= $costEat;
+					else bg.r -= $costEat;
 				} else if(action == $_move || action == $_clone) {
 					 int direction = int(bg.a * 16. + .5);
 					if((direction == 1 && texture2D(cells, pos + vec2(-$invWidth, 0.)).a != 0.)
@@ -583,8 +589,8 @@
 			ivec4 actions = ivec4(mod(neighborhood + $half, $16) * 255.);
 			ivec4 directions = ivec4(neighborhood * 16. + .5);
 			if(cell.r != 0.) {
-				float a = texture2D(background, pos).a;
-				int action = int(mod(a + $half, $16) * 255.);
+				vec4 bg = texture2D(background, pos);
+				int action = int(mod(bg.a + $half, $16) * 255.);
 				if(action == $_eat)     cell.b += $gainEat; else
 				if(action == $_draw)  { cell.b += $gainDraw; cell.a -= $costDraw; } else
 				if(action == $_build) { cell.b -= $costBuild; cell.a += $gainDraw; } else
@@ -592,6 +598,7 @@
 				if(action == $_give)  { cell.b -= $costGive; } else
 				if(action == $_take)  { cell.b += $gainTake; } else
 				if(action == $_clone) { cell.b -= $costClone; } else
+				if(action == $_change){ cell.b -= $costChange; cell.g = bg.a - float(action) * $1; }
 				if(action == $_die)   { cell = vec4(0.); }
 			}
 			if(directions.r == 2) cell = collateral(actions.r, cell, texture2D(cells, pos + vec2(-$invWidth, 0.)));
