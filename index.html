@@ -186,9 +186,9 @@
 				density: 0.1,
 				min_food: 50, max_food: 150
 			},
-			eat:  1,	draw: 2,	build:3,	move: 4,	give: 5,	take: 6,	clone:7,	change: 8,	die:  9,
+			eat:  1,	draw: 2,	build:3,	move: 4,	give: 5,	take: 6,	clone:7,	die:  9,
 			gainEat:1,	gainDraw:6,	gainBuild:1,			gainGive:2,	gainTake:10,
-			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,	costTake:10,costClone:100,costChange:0,
+			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,	costTake:10,costClone:100,
 			costNaked: 1, probaRegenerate: 1,
 			species : [
 				{ name: "plant" },
@@ -309,8 +309,6 @@
 		}
 		function process(gl) {
 			run(gl, "decide", gl.content.background)
-			run(gl, "check", gl.content.background)
-			run(gl, "mark", gl.content.background)
 			run(gl, "resolve", gl.content.background)
 			run(gl, "act", gl.content.cells)
 		}
@@ -424,87 +422,79 @@
 	<script type="x-shader/x-fragment" id="decide">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
-		float select2(bvec2 candidates, float rnd) { return (candidates.x && (!candidates.y || rnd > .5)) ? $16 : $32; }
-		float select4(bvec4 candidates, vec2 rnd) {
-			return any(candidates.rg) && ((!any(candidates.ba)) || (rnd.r > .5)) ? select2(candidates.rg, rnd.g) : (select2(candidates.ba, rnd.g) * 4.);
+		int select2(bvec2 candidates, float rnd) { return (candidates.x && (!candidates.y || rnd > .5)) ? 1 : 2; }
+		int select4(bvec4 candidates, vec2 rnd) {
+			return any(candidates.rg) && ((!any(candidates.ba)) || (rnd.r > .5)) ? select2(candidates.rg, rnd.g) : (select2(candidates.ba, rnd.g) * 4);
 		}
-		float decide(vec4 b_here, vec4 b_left, vec4 b_right, vec4 b_up, vec4 b_down,
-					 vec4 c_here, vec4 c_left, vec4 c_right, vec4 c_up, vec4 c_down, vec4 rnd) {
-			//return $move + (rnd.r > .5 ? (rnd.g > .5 ? $up : $down) : (rnd.g > .5 ? $left : $right));
-			bvec4 vacancies = bvec4(c_left.a == 0., c_right.a == 0., c_up.a == 0., c_down.a == 0.);
-			//bvec4 friends = equal(vec4(c_left.a, c_right.a, c_up.a, c_down.a), vec4(c_here.a));
-			/*if(c_here.b > .9 && any(vacancies)) return $clone + select4(vacancies, rnd.rg); // if rich and alone, clone
-			if(c_here.b < .5 && b_here.a > $costEat) return $eat; // if poor and there's food, eat
-			if(b_here.a < .5 && any(vacancies)) { // if there's not much food and there are vacancies, move
-				return rnd.r > .5 ? $eat : ($move + select4(vacancies, rnd.ba));
-			}
-			return rnd.r > .5 ? $eat : $build;*/
-			//return c_here.b > $costMove ? ($move + $left) : $eat;
+		ivec3 /* ( action, direction, state )*/
+		decide(	vec2 bg, vec4 cell, vec4 rnd,
+				vec4 prox_food, vec4 prox_tbd,
+				vec4 prox_species, vec4 prox_states, vec4 prox_energy, vec4 prox_protect
+		){
+			bvec4 vacancies	= equal(prox_species, vec4(0.));
+			bvec4 friends	= equal(prox_species, vec4(cell.r));
+			if(cell.b > $costClone && any(vacancies)) return ivec3($_clone, select4(vacancies, rnd.rg), 0);
+			return ivec3(
+				(cell.b > $costMove && rnd.r < .1 && any(vacancies) && !any(friends)) ? ivec2($_move, select4(vacancies, rnd.gb)) : ivec2($_eat, 0),
+				0);
+		}
+		void main(void) {
+			// fetch data here
+			vec2 pos = gl_FragCoord.xy * $invSize;
+			vec4 bg = texture2D(background, pos);
+			vec4 cell = texture2D(cells, pos);
 			
-			//if(c_here.g == 0.) return $change + $16; else return $move + $left;
-			bvec4 greener = greaterThan(vec4(b_left.r, b_right.r, b_up.r, b_down.r), vec4(b_here.r));
-			bvec4 greenerFree = notEqual(ivec4(vacancies) * ivec4(greener), ivec4(0));
-			if(b_here.r > $costMove && any(greenerFree)) return rnd.b > c_here.b ? $eat : ($move + select4(greenerFree, rnd.rg));
-			if(b_here.r > .5 && c_here.b > .5) return any(vacancies) ? ($clone + select4(vacancies, rnd.rg)) : $build; // rich green => clone
-			if(b_here.r < .1 && c_here.b < .1) return $draw;
-			return (rnd.r > .9 && any(vacancies)) ? ($move + select4(vacancies, rnd.ba)) : $eat;
-		}
-		void main(void) {
-			vec2 pos = gl_FragCoord.xy * $invSize;
-			vec4 bg = texture2D(background, pos);
-			vec4 cell = texture2D(cells, pos);
-			if(cell.r != 0.) {
-				float action = decide(
-					bg,
-					texture2D(background, pos + vec2(-$invWidth, 0.)),
-					texture2D(background, pos + vec2( $invWidth, 0.)),
-					texture2D(background, pos + vec2(0., -$invHeight)),
-					texture2D(background, pos + vec2(0.,  $invHeight)),
-					cell,
-					texture2D(cells, pos + vec2(-$invWidth, 0.)),
-					texture2D(cells, pos + vec2( $invWidth, 0.)),
-					texture2D(cells, pos + vec2(0., -$invHeight)),
-					texture2D(cells, pos + vec2(0.,  $invHeight)),
-					texture2D(entropy, pos + seed)
-				);
-				gl_FragColor = vec4(bg.rgb, action);
-			} else gl_FragColor = vec4(bg.rgb, 0.);
-		}
-	</script>
-	<script type="x-shader/x-fragment" id="check">
-		uniform sampler2D background, cells, entropy;
-		uniform vec2 seed;
-		void main(void) {
-			vec2 pos = gl_FragCoord.xy * $invSize;
-			vec4 bg = texture2D(background, pos);
-			vec4 cell = texture2D(cells, pos);
-			if(cell.r != 0.) {
-				int action = int(mod(bg.a + $half, $16) * 255.);
-				if((action == $_draw  && cell.a < $costDraw)
-				|| (action == $_build && cell.b < $costBuild)
-				|| (action == $_move  && cell.b < $costMove)
-				|| (action == $_give  && cell.b < $costGive)
-				|| (action == $_take  && cell.b < $costTake)
-				|| (action == $_clone && cell.b < $costClone)
-				|| (action == $_change && cell.b < $costChange)
-				) bg.a = $die;
-				else if(action == $_eat) {
-					if(bg.r < $costEat) bg.a = 0.;
-					else bg.r -= $costEat;
-				} else if(action == $_move || action == $_clone) {
-					 int direction = int(bg.a * 16. + .5);
-					if((direction == 1 && texture2D(cells, pos + vec2(-$invWidth, 0.)).a != 0.)
-					|| (direction == 2 && texture2D(cells, pos + vec2( $invWidth, 0.)).a != 0.)
-					|| (direction == 4 && texture2D(cells, pos + vec2(0., -$invHeight)).a != 0.)
-					|| (direction == 8 && texture2D(cells, pos + vec2(0.,  $invHeight)).a != 0.)
-					) bg.a = 0.;
-				}
-			}
+			// regenerate food
+			vec4 rnd = texture2D(entropy, pos + seed);
 			if(texture2D(entropy, pos + seed).r < $probaRegenerate) bg.r += $1;
-			gl_FragColor = bg;
+			
+			if(cell.r != 0.) {
+				// fetch proximity data
+				vec2 bg_left  = texture2D(background, pos + vec2(-$invWidth, 0.)).rg;
+				vec2 bg_right = texture2D(background, pos + vec2( $invWidth, 0.)).rg;
+				vec2 bg_up    = texture2D(background, pos + vec2(0.,-$invHeight)).rg;
+				vec2 bg_down  = texture2D(background, pos + vec2(0., $invHeight)).rg;
+				vec4 ce_left  = texture2D(cells, pos + vec2(-$invWidth, 0.));
+				vec4 ce_right = texture2D(cells, pos + vec2( $invWidth, 0.));
+				vec4 ce_up    = texture2D(cells, pos + vec2(0., -$invHeight));
+				vec4 ce_down  = texture2D(cells, pos + vec2(0.,  $invHeight));
+				
+				// transpose proximity
+				vec4 food 		= vec4(bg_left.r, bg_right.r, bg_up.r, bg_down.r);
+				vec4 species 	= vec4(ce_left.r, ce_right.r, ce_up.r, ce_down.r);
+				vec4 tbd 		= vec4(bg_left.g, bg_right.g, bg_up.g, bg_down.g);
+				vec4 states 	= vec4(ce_left.g, ce_right.g, ce_up.g, ce_down.g);
+				vec4 energy 	= vec4(ce_left.b, ce_right.b, ce_up.b, ce_down.b);
+				vec4 protection	= vec4(ce_left.a, ce_right.a, ce_up.a, ce_down.a);
+				
+				// call decision function
+				ivec3 decision = decide(bg.rg, cell, rnd, food, tbd, species, states, energy, protection);
+				
+				// die if trying a too expensive action /// TODO: not all or nothing for draw/build
+				if((decision.r == $_draw  && cell.a < $costDraw)
+				|| (decision.r == $_build && cell.b < $costBuild)
+				|| (decision.r == $_move  && cell.b < $costMove)
+				|| (decision.r == $_give  && cell.b < $costGive)
+				|| (decision.r == $_take  && cell.b < $costTake)
+				|| (decision.r == $_clone && cell.b < $costClone)
+				) decision = ivec3($_die, 0, 0);
+				// revert moves/clones towards occupied positions
+				else if(decision.r == $_move || decision.r == $_clone) {
+					if((decision.g == 1 && species.r != 0.)
+					|| (decision.g == 2 && species.g != 0.)
+					|| (decision.g == 4 && species.b != 0.)
+					|| (decision.g == 8 && species.a != 0.)
+					) decision.rg = ivec2(0);
+				}
+				// eating consumes food from background
+				else if(decision.r == $_eat) { if(bg.r < $costEat) decision.r = 0; else bg.r -= $costEat; }
+				// write results
+				gl_FragColor = vec4(bg.rg, float(decision.b) * $1, float(decision.r) * $1 + float(decision.g) * $16);
+			} else gl_FragColor = vec4(bg.rg, vec2(0.));
 		}
 	</script>
-	<script type="x-shader/x-fragment" id="mark">
+	
+	<script type="x-shader/x-fragment" id="resolve">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
 		float select2(bvec2 candidates, float rnd) {
@@ -542,29 +532,7 @@
 			} else gl_FragColor = bg;
 		}
 	</script>
-	<script type="x-shader/x-fragment" id="resolve">
-		uniform sampler2D background, cells, entropy;
-		uniform vec2 seed;
-		void main(void) {
-			vec2 pos = gl_FragCoord.xy * $invSize;
-			vec4 bg = texture2D(background, pos);
-			vec4 cell = texture2D(cells, pos);
-			if(cell.r != 0.) {
-				int action = int(mod(bg.a + $half, $16) * 255.);
-				if(action == $_move || action == $_clone) {
-					int direction = int(bg.a * 16. + .5);
-					float ctrl_f;
-					if(direction == 1)	ctrl_f = texture2D(background, pos + vec2(-$invWidth, 0.)).a; else
-					if(direction == 2)	ctrl_f = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
-					if(direction == 4)	ctrl_f = texture2D(background, pos + vec2(0., -$invWidth)).a; else
-					if(direction == 8)	ctrl_f = texture2D(background, pos + vec2(0.,  $invWidth)).a; else
-										ctrl_f = 0.;
-					if(direction != int(ctrl_f * 16.)) bg.a = 0.;
-				}
-			}
-			gl_FragColor = bg;
-		}
-	</script>
+	
 	<script type="x-shader/x-fragment" id="act">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
@@ -580,7 +548,6 @@
 		}
 		void main(void) {
 			vec2 pos = gl_FragCoord.xy * $invSize;
-			
 			vec4 cell = texture2D(cells, pos);
 			vec4 neighborhood = vec4(	texture2D(background, pos + vec2(-$invWidth, 0.)).a,
 										texture2D(background, pos + vec2( $invWidth, 0.)).a,
@@ -588,9 +555,26 @@
 										texture2D(background, pos + vec2(0.,  $invWidth)).a	);
 			ivec4 actions = ivec4(mod(neighborhood + $half, $16) * 255.);
 			ivec4 directions = ivec4(neighborhood * 16. + .5);
+
 			if(cell.r != 0.) {
+				
+				// set state
 				vec4 bg = texture2D(background, pos);
+				if(cell.r != 0.) cell.g = bg.b;
+				
+				// revert conflicting actions that were not selected by "resolve"
 				int action = int(mod(bg.a + $half, $16) * 255.);
+				if(action == $_move || action == $_clone) {
+					int direction = int(bg.a * 16. + .5);
+					float ctrl_f;
+					if(direction == 1)	ctrl_f = texture2D(background, pos + vec2(-$invWidth, 0.)).a; else
+					if(direction == 2)	ctrl_f = texture2D(background, pos + vec2( $invWidth, 0.)).a; else
+					if(direction == 4)	ctrl_f = texture2D(background, pos + vec2(0., -$invWidth)).a; else
+					if(direction == 8)	ctrl_f = texture2D(background, pos + vec2(0.,  $invWidth)).a; else
+										ctrl_f = 0.;
+					if(direction != int(ctrl_f * 16.)) action = 0;
+				}
+				// apply first half of actions : on owner
 				if(action == $_eat)     cell.b += $gainEat; else
 				if(action == $_draw)  { cell.b += $gainDraw; cell.a -= $costDraw; } else
 				if(action == $_build) { cell.b -= $costBuild; cell.a += $gainDraw; } else
@@ -598,18 +582,20 @@
 				if(action == $_give)  { cell.b -= $costGive; } else
 				if(action == $_take)  { cell.b += $gainTake; } else
 				if(action == $_clone) { cell.b -= $costClone; } else
-				if(action == $_change){ cell.b -= $costChange; cell.g = bg.a - float(action) * $1; }
 				if(action == $_die)   { cell = vec4(0.); }
 			}
+			// apply second half of actions : on affected neighboors
 			if(directions.r == 2) cell = collateral(actions.r, cell, texture2D(cells, pos + vec2(-$invWidth, 0.)));
 			if(directions.g == 1) cell = collateral(actions.g, cell, texture2D(cells, pos + vec2( $invWidth, 0.)));
 			if(directions.b == 8) cell = collateral(actions.b, cell, texture2D(cells, pos + vec2(0., -$invWidth)));
 			if(directions.a == 4) cell = collateral(actions.a, cell, texture2D(cells, pos + vec2(0.,  $invWidth)));
 			
+			// final EP check
 			if(cell.r != 0.) {
 				if(cell.a < $1) cell.b -= $costNaked;
 				if(cell.b < $1) cell = vec4(0.);
 			} else cell = vec4(0.);
+			
 			gl_FragColor = cell;
 		}
 	</script>
