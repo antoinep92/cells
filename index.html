@@ -189,7 +189,7 @@
 			eat:  1,	draw: 2,	build:3,	move: 4,	give: 5,	take: 6,	clone:7,	die:  9,
 			gainEat:1,	gainDraw:6,	gainBuild:1,			gainGive:2,	gainTake:10,
 			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,	costTake:10,costClone:100,
-			costNaked: 1, probaRegenerate: 1,
+			costNaked: 1, probaRegenerate: 30,
 			species : [
 				{ name: "plant" },
 				{ name: "sheep" },
@@ -422,21 +422,41 @@
 	<script type="x-shader/x-fragment" id="decide">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
-		int select2(bvec2 candidates, float rnd) { return (candidates.x && (!candidates.y || rnd > .5)) ? 1 : 2; }
-		int select4(bvec4 candidates, vec2 rnd) {
-			return any(candidates.rg) && ((!any(candidates.ba)) || (rnd.r > .5)) ? select2(candidates.rg, rnd.g) : (select2(candidates.ba, rnd.g) * 4);
+		int select(bvec2 candidates, float rnd) { return (candidates.x && (!candidates.y || rnd > .5)) ? 1 : 2; }
+		int select(bvec4 candidates, vec2 rnd) {
+			return any(candidates.rg) && ((!any(candidates.ba)) || (rnd.r > .5)) ? select(candidates.rg, rnd.g) : (select(candidates.ba, rnd.g) * 4);
+		}
+		float max(vec4 v) { vec2 m2 = max(v.rg, v.ba); return max(m2.r, m2.g); }
+		int selectMax(bvec4 candidates, vec4 levels, vec2 rnd) {
+			vec4 candidateLevels = levels * vec4(candidates);
+			return select(equal(candidateLevels, vec4(max(candidateLevels))), rnd);
 		}
 		ivec3 /* ( action, direction, state )*/
 		decide(	vec2 bg, vec4 cell, vec4 rnd,
 				vec4 prox_food, vec4 prox_tbd,
-				vec4 prox_species, vec4 prox_states, vec4 prox_energy, vec4 prox_protect
+				ivec4 prox_species, vec4 prox_states, vec4 prox_energy, vec4 prox_protect
 		){
-			bvec4 vacancies	= equal(prox_species, vec4(0.));
-			bvec4 friends	= equal(prox_species, vec4(cell.r));
-			if(cell.b > $costClone && any(vacancies)) return ivec3($_clone, select4(vacancies, rnd.rg), 0);
-			return ivec3(
-				(cell.b > $costMove && rnd.r < .1 && any(vacancies) && !any(friends)) ? ivec2($_move, select4(vacancies, rnd.gb)) : ivec2($_eat, 0),
-				0);
+			bvec4 vacancies	= equal(prox_species, ivec4(0));
+			bvec4 friends	= equal(prox_species, ivec4(int(cell.r * 256.)));
+			bvec4 ennemies	= equal( ivec4(friends) + ivec4(vacancies), ivec4(0) );
+			vec4 vacant_food = prox_food * vec4(vacancies);
+			float max_vacant_food = max(vacant_food);
+			bvec4 pos_vacant_food = equal(vacant_food, vec4(max_vacant_food));
+			if(any(ennemies)) {
+				if(any(friends)) return ivec3($_take, select(ennemies, rnd.rg), 0);
+				if(any(vacancies)) return ivec3($_move, select(vacancies, rnd.rg), 0);
+				return ivec3($_die, 0, 0);
+			}
+			if(!any(friends)) {
+				if(bg.r > 2. * cell.b) return ivec3($_eat, 0, 0);
+				if(cell.b > ($costMove + $1) && any(vacancies) && rnd.r < .1) return ivec3($_move, select(pos_vacant_food, rnd.gb), 0);
+				return ivec3($_eat, 0, 0);
+			} else {
+				if(cell.b > ($costClone + $1) && any(vacancies)) return ivec3($_clone, select(vacancies, rnd.rg), 0);
+				if((!any(friends.rgb) || !any(friends.gba) || !any(friends.rba) || !any(friends.rga)) && max_vacant_food > 2. * bg.r)
+					return ivec3($_move, select(pos_vacant_food, rnd.rg), 0);
+				return ivec3($_eat, 0, 0);
+			}
 		}
 		void main(void) {
 			// fetch data here
@@ -461,7 +481,7 @@
 				
 				// transpose proximity
 				vec4 food 		= vec4(bg_left.r, bg_right.r, bg_up.r, bg_down.r);
-				vec4 species 	= vec4(ce_left.r, ce_right.r, ce_up.r, ce_down.r);
+				ivec4 species 	= ivec4( vec4(ce_left.r, ce_right.r, ce_up.r, ce_down.r) * 256. );
 				vec4 tbd 		= vec4(bg_left.g, bg_right.g, bg_up.g, bg_down.g);
 				vec4 states 	= vec4(ce_left.g, ce_right.g, ce_up.g, ce_down.g);
 				vec4 energy 	= vec4(ce_left.b, ce_right.b, ce_up.b, ce_down.b);
@@ -480,10 +500,10 @@
 				) decision = ivec3($_die, 0, 0);
 				// revert moves/clones towards occupied positions
 				else if(decision.r == $_move || decision.r == $_clone) {
-					if((decision.g == 1 && species.r != 0.)
-					|| (decision.g == 2 && species.g != 0.)
-					|| (decision.g == 4 && species.b != 0.)
-					|| (decision.g == 8 && species.a != 0.)
+					if((decision.g == 1 && species.r != 0)
+					|| (decision.g == 2 && species.g != 0)
+					|| (decision.g == 4 && species.b != 0)
+					|| (decision.g == 8 && species.a != 0)
 					) decision.rg = ivec2(0);
 				}
 				// eating consumes food from background
