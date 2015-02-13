@@ -443,7 +443,10 @@
 			if(cell.a < $1 && cell.b > ($costBuild + $1)) return ivec3($_build, 0, 0);
 			if(any(ennemies)) {
 				if(any(friends)) return ivec3($_take, select(ennemies, rnd.rg), 0);
-				if(any(vacancies)) return ivec3($_move, select(vacancies, rnd.rg), 0);
+				if(any(vacancies)) {
+					if(rnd.r < cell.b) return ivec3($_take, select(ennemies, rnd.gb), 0);
+					else return ivec3($_move, select(vacancies, rnd.gb), 0);
+				}
 				return ivec3($_die, 0, 0);
 			}
 			if(!any(friends)) {
@@ -453,6 +456,7 @@
 			} else {
 				float min_friend = min(prox_energy + vec4(not(friends)));
 				if(cell.b > 2. * min_friend) return ivec3($_give, select(equal(prox_energy + vec4(not(friends)), vec4(min_friend)) , rnd.rg), 0);
+				if(cell.b > 2. * cell.a) return ivec3($_build, 0, 0);
 				if(cell.b > ($costClone + $1) && any(vacancies)) return ivec3($_clone, select(vacancies, rnd.rg), 0);
 				if(rnd.r < .1 && (!any(friends.rgb) || !any(friends.gba) || !any(friends.rba) || !any(friends.rga)) && max_vacant_food > 2. * bg.r)
 					return ivec3($_move, select(pos_vacant_food, rnd.ba), 0);
