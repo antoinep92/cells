@@ -187,9 +187,10 @@
 				min_food: 50, max_food: 150
 			},
 			eat:  1,	draw: 2,	build:3,	move: 4,	give: 5,	take: 6,	clone:7,	die:  9,
-			gainEat:1,	gainDraw:6,	gainBuild:1,			gainGive:2,	gainTake:10,
-			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,	costTake:10,costClone:100,
-			costNaked: 1, probaRegenerate: 30,
+			gainEat:1,	gainDraw:6,	gainBuild:1,			gainGive:2,
+			costEat:3,	costDraw:8,	costBuild:2,costMove:2,	costGive:3,costClone:100,
+			gainTake: 1, costTake: 2, taken: 10,
+			costNaked: 1, probaRegenerate: 1,
 			species : [
 				{ name: "plant" },
 				{ name: "sheep" },
@@ -427,10 +428,7 @@
 			return any(candidates.rg) && ((!any(candidates.ba)) || (rnd.r > .5)) ? select(candidates.rg, rnd.g) : (select(candidates.ba, rnd.g) * 4);
 		}
 		float max(vec4 v) { vec2 m2 = max(v.rg, v.ba); return max(m2.r, m2.g); }
-		int selectMax(bvec4 candidates, vec4 levels, vec2 rnd) {
-			vec4 candidateLevels = levels * vec4(candidates);
-			return select(equal(candidateLevels, vec4(max(candidateLevels))), rnd);
-		}
+		float min(vec4 v) { vec2 m2 = min(v.rg, v.ba); return min(m2.r, m2.g); }
 		ivec3 /* ( action, direction, state )*/
 		decide(	vec2 bg, vec4 cell, vec4 rnd,
 				vec4 prox_food, vec4 prox_tbd,
@@ -442,6 +440,7 @@
 			vec4 vacant_food = prox_food * vec4(vacancies);
 			float max_vacant_food = max(vacant_food);
 			bvec4 pos_vacant_food = equal(vacant_food, vec4(max_vacant_food));
+			if(cell.a < $1 && cell.b > ($costBuild + $1)) return ivec3($_build, 0, 0);
 			if(any(ennemies)) {
 				if(any(friends)) return ivec3($_take, select(ennemies, rnd.rg), 0);
 				if(any(vacancies)) return ivec3($_move, select(vacancies, rnd.rg), 0);
@@ -452,9 +451,11 @@
 				if(cell.b > ($costMove + $1) && any(vacancies) && rnd.r < .1) return ivec3($_move, select(pos_vacant_food, rnd.gb), 0);
 				return ivec3($_eat, 0, 0);
 			} else {
+				float min_friend = min(prox_energy + vec4(not(friends)));
+				if(cell.b > 2. * min_friend) return ivec3($_give, select(equal(prox_energy + vec4(not(friends)), vec4(min_friend)) , rnd.rg), 0);
 				if(cell.b > ($costClone + $1) && any(vacancies)) return ivec3($_clone, select(vacancies, rnd.rg), 0);
-				if((!any(friends.rgb) || !any(friends.gba) || !any(friends.rba) || !any(friends.rga)) && max_vacant_food > 2. * bg.r)
-					return ivec3($_move, select(pos_vacant_food, rnd.rg), 0);
+				if(rnd.r < .1 && (!any(friends.rgb) || !any(friends.gba) || !any(friends.rba) || !any(friends.rga)) && max_vacant_food > 2. * bg.r)
+					return ivec3($_move, select(pos_vacant_food, rnd.ba), 0);
 				return ivec3($_eat, 0, 0);
 			}
 		}
@@ -495,7 +496,6 @@
 				|| (decision.r == $_build && cell.b < $costBuild)
 				|| (decision.r == $_move  && cell.b < $costMove)
 				|| (decision.r == $_give  && cell.b < $costGive)
-				|| (decision.r == $_take  && cell.b < $costTake)
 				|| (decision.r == $_clone && cell.b < $costClone)
 				) decision = ivec3($_die, 0, 0);
 				// revert moves/clones towards occupied positions
@@ -556,13 +556,14 @@
 	<script type="x-shader/x-fragment" id="act">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
+		vec2 taken(float protect) { vec2 r; r.x = $taken - (r.y = min(protect, $taken)); return r; }
 		vec4 collateral(int action, vec4 here, vec4 source) {
 			if(here.a == 0.) { // create/move cell to empty position
 				if(action == $_move) return source - vec4(0., 0., $costMove, 0.);
 				if(action == $_clone) return vec4(source.r, 0., $initE, $initP);
 			} else { // interact between 2 cells
 				if(action == $_give) return here + vec4(0., 0., $gainGive, 0.);
-				if(action == $_take) return here - vec4(0., 0., $costTake, 0.);
+				if(action == $_take) return here - vec4(0., 0., taken(here.a));
 			}
 			return here;
 		}
@@ -600,7 +601,16 @@
 				if(action == $_build) { cell.b -= $costBuild; cell.a += $gainDraw; } else
 				if(action == $_move)  { cell = vec4(0.); }
 				if(action == $_give)  { cell.b -= $costGive; } else
-				if(action == $_take)  { cell.b += $gainTake; } else
+				if(action == $_take)  {
+					int direction = int(bg.a * 16. + .5);
+					vec4 other;
+					if(direction == 1) other = texture2D(cells, pos + vec2(-$invWidth, 0.)); else
+					if(direction == 2) other = texture2D(cells, pos + vec2( $invWidth, 0.)); else
+					if(direction == 4) other = texture2D(cells, pos + vec2(0., -$invWidth)); else
+					if(direction == 8) other = texture2D(cells, pos + vec2(0.,  $invWidth));
+					vec2 t = taken(other.a);
+					cell.b += t.x * $gainTake - t.y * $costTake;
+				} else
 				if(action == $_clone) { cell.b -= $costClone; } else
 				if(action == $_die)   { cell = vec4(0.); }
 			}
