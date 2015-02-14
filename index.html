@@ -341,7 +341,7 @@
 			draw(gl)
 			gl.content.cycle++
 		}
-    </script>
+    </script>    
 	<script type="x-shader/x-vertex" id="2d">
 		uniform float time;
 		attribute vec2 posIn;
@@ -423,46 +423,49 @@
 	<script type="x-shader/x-fragment" id="decide">
 		uniform sampler2D background, cells, entropy;
 		uniform vec2 seed;
+
+float max(vec4 v) { vec2 m2 = max(v.rg, v.ba); return max(m2.r, m2.g); }
+		float min(vec4 v) { vec2 m2 = min(v.rg, v.ba); return min(m2.r, m2.g); }
 		int select(bvec2 candidates, float rnd) { return (candidates.x && (!candidates.y || rnd > .5)) ? 1 : 2; }
 		int select(bvec4 candidates, vec2 rnd) {
 			return any(candidates.rg) && ((!any(candidates.ba)) || (rnd.r > .5)) ? select(candidates.rg, rnd.g) : (select(candidates.ba, rnd.g) * 4);
 		}
-		float max(vec4 v) { vec2 m2 = max(v.rg, v.ba); return max(m2.r, m2.g); }
-		float min(vec4 v) { vec2 m2 = min(v.rg, v.ba); return min(m2.r, m2.g); }
+		
 		ivec3 /* ( action, direction, state )*/
-		decide(	vec2 bg, vec4 cell, vec4 rnd,
-				vec4 prox_food, vec4 prox_tbd,
-				ivec4 prox_species, vec4 prox_states, vec4 prox_energy, vec4 prox_protect
+		d1(	float food, float tbd, int species, float mem, float energy, float protection,
+			vec4 rnd,
+			vec4 prox_food, vec4 prox_tbd, ivec4 prox_species, vec4 prox_mem, vec4 prox_energy, vec4 prox_protect
 		){
 			bvec4 vacancies	= equal(prox_species, ivec4(0));
-			bvec4 friends	= equal(prox_species, ivec4(int(cell.r * 256.)));
+			bvec4 friends	= equal(prox_species, ivec4(species));
 			bvec4 ennemies	= equal( ivec4(friends) + ivec4(vacancies), ivec4(0) );
 			vec4 vacant_food = prox_food * vec4(vacancies);
 			float max_vacant_food = max(vacant_food);
 			bvec4 pos_vacant_food = equal(vacant_food, vec4(max_vacant_food));
-			if(cell.a < $1 && cell.b > ($costBuild + $1)) return ivec3($_build, 0, 0);
+			if(protection < $1 && energy > ($costBuild + $1)) return ivec3($_build, 0, 0);
 			if(any(ennemies)) {
 				if(any(friends)) return ivec3($_take, select(ennemies, rnd.rg), 0);
 				if(any(vacancies)) {
-					if(rnd.r < cell.b) return ivec3($_take, select(ennemies, rnd.gb), 0);
+					if(rnd.r < energy) return ivec3($_take, select(ennemies, rnd.gb), 0);
 					else return ivec3($_move, select(vacancies, rnd.gb), 0);
 				}
 				return ivec3($_die, 0, 0);
 			}
 			if(!any(friends)) {
-				if(bg.r > 2. * cell.b) return ivec3($_eat, 0, 0);
-				if(cell.b > ($costMove + $1) && any(vacancies) && rnd.r < .1) return ivec3($_move, select(pos_vacant_food, rnd.gb), 0);
+				if(food > 2. * energy) return ivec3($_eat, 0, 0);
+				if(energy > ($costMove + $1) && any(vacancies) && rnd.r < .1) return ivec3($_move, select(pos_vacant_food, rnd.gb), 0);
 				return ivec3($_eat, 0, 0);
 			} else {
 				float min_friend = min(prox_energy + vec4(not(friends)));
-				if(cell.b > 2. * min_friend) return ivec3($_give, select(equal(prox_energy + vec4(not(friends)), vec4(min_friend)) , rnd.rg), 0);
-				if(cell.b > 2. * cell.a) return ivec3($_build, 0, 0);
-				if(cell.b > ($costClone + $1) && any(vacancies)) return ivec3($_clone, select(vacancies, rnd.rg), 0);
-				if(rnd.r < .1 && (!any(friends.rgb) || !any(friends.gba) || !any(friends.rba) || !any(friends.rga)) && max_vacant_food > 2. * bg.r)
+				if(energy > 2. * min_friend) return ivec3($_give, select(equal(prox_energy + vec4(not(friends)), vec4(min_friend)) , rnd.rg), 0);
+				if(energy > 2. * protection) return ivec3($_build, 0, 0);
+				if(energy > ($costClone + $1) && any(vacancies)) return ivec3($_clone, select(vacancies, rnd.rg), 0);
+				if(rnd.r < .1 && (!any(friends.rgb) || !any(friends.gba) || !any(friends.rba) || !any(friends.rga)) && max_vacant_food > 2. * food)
 					return ivec3($_move, select(pos_vacant_food, rnd.ba), 0);
 				return ivec3($_eat, 0, 0);
 			}
 		}
+		
 		void main(void) {
 			// fetch data here
 			vec2 pos = gl_FragCoord.xy * $invSize;
@@ -488,12 +491,23 @@
 				vec4 food 		= vec4(bg_left.r, bg_right.r, bg_up.r, bg_down.r);
 				ivec4 species 	= ivec4( vec4(ce_left.r, ce_right.r, ce_up.r, ce_down.r) * 256. );
 				vec4 tbd 		= vec4(bg_left.g, bg_right.g, bg_up.g, bg_down.g);
-				vec4 states 	= vec4(ce_left.g, ce_right.g, ce_up.g, ce_down.g);
+				vec4 mems 		= vec4(ce_left.g, ce_right.g, ce_up.g, ce_down.g);
 				vec4 energy 	= vec4(ce_left.b, ce_right.b, ce_up.b, ce_down.b);
 				vec4 protection	= vec4(ce_left.a, ce_right.a, ce_up.a, ce_down.a);
 				
 				// call decision function
-				ivec3 decision = decide(bg.rg, cell, rnd, food, tbd, species, states, energy, protection);
+				float f = bg.r;	// food
+				float t = bg.g;	// tbd
+				int s = int(cell.r * 256.); // species
+				float m = cell.g;	// memory
+				float e = cell.b;	// energy
+				float p = cell.a;	// protection
+				ivec3 decision;
+				/*
+				if(s == 1)	decision = d1(bg.rg, cell, rnd, food, tbd, species, states, energy, protection); else
+				if(s == 2)	decision = d2(bg.rg, cell, rnd, food, tbd, species, states, energy, protection); else
+							decision = ivec3(0);*/
+				decision = d1(f, t, s, m, e, p, rnd, food, tbd, species, mems, energy, protection);
 				
 				// die if trying a too expensive action /// TODO: not all or nothing for draw/build
 				if((decision.r == $_draw  && cell.a < $costDraw)
